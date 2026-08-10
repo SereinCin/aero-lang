@@ -1,0 +1,25 @@
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn fact(n: i64) -> i64 {
+    if (n <= 1) { return 1; }
+    return n * fact(n - 1);
+}
+
+fn greet(name: i64) {}
+
+print(add(1, 2));
+print(fact(5));
+greet(1);
+
+let arr = [1, 2, 3];
+print(arr[0]);
+print(arr[2]);
+
+let t = (10, true);
+print(t[0]);
+print(t[1]);
+
+let x: i32 = 5;
+print(x);

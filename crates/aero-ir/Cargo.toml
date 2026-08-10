@@ -1,0 +1,11 @@
+[package]
+name = "aero-ir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aero-lex = { path = "../aero-lex" }
+aero-parse = { path = "../aero-parse" }
+aero-hir = { path = "../aero-hir" }
+inkwell = { version = "0.9", default-features = false, features = ["llvm22-1", "target-x86"] }

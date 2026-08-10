@@ -1,0 +1,10 @@
+[package]
+name = "aero-pm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aero-parse = { path = "../aero-parse" }
+aero-hir = { path = "../aero-hir" }
+aero-ir = { path = "../aero-ir" }
