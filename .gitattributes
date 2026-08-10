@@ -1,0 +1,5 @@
+# GitHub Linguist: `.aero` is not a known language, so the file viewer would
+# guess Java from the C-like syntax. Map it to Rust, whose `let`/`fn`/`while`
+# highlighting matches Aero best. (A native `Aero` entry requires a PR to
+# github/linguist; see docs/roadmap.md.)
+*.aero linguist-language=Rust
