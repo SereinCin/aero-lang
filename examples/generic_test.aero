@@ -1,0 +1,47 @@
+// Generic-system test: type inference + monomorphization
+//
+// Coverage:
+//   1. the identity function identity<T>
+//   2. same-type parameter constraint max<T>(a: T, b: T) -> T
+//   3. generic array parameter first<T>(arr: [T; 3]) -> T
+//   4. multiple generic params make_pair<A, B> -> (A, B)
+//   5. nested generics: a generic body calling another generic fn (relative instances + type_subst)
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn max<T>(a: T, b: T) -> T {
+    if (a > b) { return a; }
+    return b;
+}
+
+fn first<T>(arr: [T; 3]) -> T {
+    return arr[0];
+}
+
+fn make_pair<A, B>(a: A, b: B) -> (A, B) {
+    return (a, b);
+}
+
+fn wrap<T>(x: T) -> T {
+    return identity(x);
+}
+
+print(identity(42));          // expect 42
+print("\n");
+print(max(3, 7));             // expect 7
+print("\n");
+print(max(10, 5));            // expect 10
+print("\n");
+let arr = [1, 2, 3];
+print(first(arr));            // expect 1
+print("\n");
+let p = make_pair(100, true);
+print(p[0]);                  // expect 100
+print("\n");
+print(p[1]);                  // expect 1 (bool prints as 1?)
+print("\n");
+print(wrap(99));              // expect 99 (nested generics)
+print("\n");
+print(identity("generic str!\n"));  // expect generic str!

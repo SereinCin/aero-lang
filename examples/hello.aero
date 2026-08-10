@@ -1,0 +1,28 @@
+// Aero hello, world
+let x = 1;
+let y = 2;
+print(x + y);        // prints 3
+print(1 + 1);        // prints 2
+print((2 + 3) * 4);  // prints 20
+print(-5 + 10);      // prints 5
+print(8 / 2 - 1);    // prints 3
+print("hello from C\n");  // FFI: routed through printf
+print("Aero is alive!\n");
+print("x + y = %d\n", x + y);  // format string + integer arg
+print("%d * %d = %d\n", 6, 7, 6 * 7);
+print("%s!\n", "format");
+
+// Control flow
+if (x + y == 3) {
+    print("if works!\n");
+} else {
+    print("should not print\n");
+}
+let i = 0;
+while (i < 5) {
+    print("loop %d\n", i);
+    i = i + 1;
+}
+if (1 < 2 && 2 < 3 || true) {
+    print("logic works!\n");
+}

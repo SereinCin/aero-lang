@@ -1,0 +1,7 @@
+[package]
+name = "aero-hir"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aero-parse = { path = "../aero-parse" }
