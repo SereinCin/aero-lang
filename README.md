@@ -50,6 +50,23 @@ libs = ["kernel32"]   # passed to the linker as -lkernel32
 lib_paths = ["."]     # extra library search paths (-L)
 ```
 
+## String System
+
+Built-in string support over C strings (`str` = `i8*`):
+
+- Concatenation: `"a" + "b"` (compile-time for literals, malloc at runtime)
+- Comparison: `==`/`!=` and `str_cmp` (all six operators)
+- `len(s)`, indexing `s[i]` (byte value), `substr(s, start, n)`
+- `int_to_str(n)`, `str_to_int(s)`, `str_contains(a, b)`, `str_find(a, b)`
+- `str_free(s)` releases malloc-allocated string results
+
+## File IO & CLI Arguments (0.1.1)
+
+- `read_file(path) -> str` — read a whole file (empty string on failure)
+- `write_file(path, contents) -> i64` — write, returns byte count (-1 on failure)
+- `arg_count() -> i64` / `arg(i) -> str` — command-line arguments
+  (AOT executables run with `myapp.exe a b c`; JIT runs with no arguments)
+
 ## License
 
 MIT
