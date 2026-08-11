@@ -81,6 +81,11 @@ const BUILTINS: &[(&str, &[Ty], Option<Ty>)] = &[
     ("str_contains", &[Ty::Str, Ty::Str], Some(Ty::Bool)),
     ("str_find", &[Ty::Str, Ty::Str], Some(Ty::I64)),
     ("str_cmp", &[Ty::Str, Ty::Str], Some(Ty::I64)),
+// File IO and command-line arguments (M1.2).
+("read_file", &[Ty::Str], Some(Ty::Str)),
+("write_file", &[Ty::Str, Ty::Str], Some(Ty::I64)),
+("arg_count", &[], Some(Ty::I64)),
+("arg", &[Ty::I64], Some(Ty::Str)),
 ];
 
 impl Lowerer {

@@ -24,7 +24,8 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
+    PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
 
@@ -103,8 +104,22 @@ pub fn compile<'ctx>(
     let abort = module.add_function("abort", context.void_type().fn_type(&[], false), None);
 
 
-    // The main function
-    let main = module.add_function("main", i64_ty.fn_type(&[], false), None);
+    // The main function: standard C entry `main(argc, argv)`. Top-level statements
+    // live here; argc/argv feed the `arg_count()`/`arg(i)` builtins (M1.2).
+    let main = module.add_function(
+        "main",
+        i64_ty.fn_type(
+            &[i32_ty.into(), i8_ptr_ty.ptr_type(AddressSpace::from(0u16)).into()],
+            false,
+        ),
+        None,
+    );
+
+    // Globals written at main entry: CLI argument count and vector.
+    let aero_argc = module.add_global(i32_ty, None, "aero_argc");
+    aero_argc.set_initializer(&i32_ty.const_zero());
+    let aero_argv = module.add_global(i8_ptr_ty.ptr_type(AddressSpace::from(0u16)), None, "aero_argv");
+    aero_argv.set_initializer(&i8_ptr_ty.ptr_type(AddressSpace::from(0u16)).const_zero());
 
     // Declare user functions (DefId aligned with program.funcs; builtin slots hold placeholders)
     let empty_subst = HashMap::new();
@@ -184,6 +199,31 @@ pub fn compile<'ctx>(
         "strtoll",
         i64_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into(), i32_ty.into()], false),
     );
+    // File IO helpers (M1.2): standard C stdio with CRT export names.
+    let fopen = declared(
+        "fopen",
+        i8_ptr_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into()], false),
+    );
+    let fclose = declared("fclose", i32_ty.fn_type(&[i8_ptr_ty.into()], false));
+    let fread = declared(
+        "fread",
+        i64_ty.fn_type(
+            &[i8_ptr_ty.into(), i64_ty.into(), i64_ty.into(), i8_ptr_ty.into()],
+            false,
+        ),
+    );
+    let fwrite = declared(
+        "fwrite",
+        i64_ty.fn_type(
+            &[i8_ptr_ty.into(), i64_ty.into(), i64_ty.into(), i8_ptr_ty.into()],
+            false,
+        ),
+    );
+    let fseek = declared(
+        "fseek",
+        i32_ty.fn_type(&[i8_ptr_ty.into(), i64_ty.into(), i32_ty.into()], false),
+    );
+    let ftell = declared("ftell", i64_ty.fn_type(&[i8_ptr_ty.into()], false));
     let strstr = declared(
         "strstr",
         i8_ptr_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into()], false),
@@ -209,6 +249,14 @@ pub fn compile<'ctx>(
         snprintf,
         strtoll,
         strstr,
+        fopen,
+        fclose,
+        fread,
+        fwrite,
+        fseek,
+        ftell,
+        aero_argc,
+        aero_argv,
         cur_func: main,
         funcs,
         arenas: HashMap::new(),
@@ -222,6 +270,11 @@ pub fn compile<'ctx>(
 
     let entry = context.append_basic_block(main, "entry");
     cg.builder.position_at_end(entry);
+    // Save argc/argv for the arg_count()/arg(i) builtins (M1.2)
+    let argc = main.get_nth_param(0).unwrap().into_int_value();
+    let argv = main.get_nth_param(1).unwrap().into_pointer_value();
+    bld(cg.builder.build_store(cg.aero_argc.as_pointer_value(), argc))?;
+    bld(cg.builder.build_store(cg.aero_argv.as_pointer_value(), argv))?;
     cg.gen_block(&program.main)?;
     if !cg.cur_block_terminated() {
         let zero = cg.i64_ty.const_zero();
@@ -412,6 +465,16 @@ struct Codegen<'a, 'ctx> {
     /// strtoll (string -> integer parse) and strstr (substring search)
     strtoll: FunctionValue<'ctx>,
     strstr: FunctionValue<'ctx>,
+    /// File IO helpers (fopen/fclose/fread/fwrite/fseek/ftell)
+    fopen: FunctionValue<'ctx>,
+    fclose: FunctionValue<'ctx>,
+    fread: FunctionValue<'ctx>,
+    fwrite: FunctionValue<'ctx>,
+    fseek: FunctionValue<'ctx>,
+    ftell: FunctionValue<'ctx>,
+    /// CLI-argument globals (written at main entry)
+    aero_argc: GlobalValue<'ctx>,
+    aero_argv: GlobalValue<'ctx>,
     /// The function currently being generated
     cur_func: FunctionValue<'ctx>,
     /// User function table (indexed by DefId; generic slots hold abort placeholders,
@@ -1230,6 +1293,248 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 if hir_f.builtin {
                     // String builtins with return values: len / int_to_str
                     match hir_f.name.as_str() {
+                        "arg_count" => {
+                            if !args.is_empty() {
+                                return Err(CodegenError {
+                                    msg: "`arg_count` takes no arguments".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let ac = bld(self.builder.build_load(
+                                self.i32_ty,
+                                self.aero_argc.as_pointer_value(),
+                                "argc",
+                            ))?;
+                            let ac64 = bld(self.builder.build_int_z_extend(
+                                ac.into_int_value(),
+                                self.i64_ty,
+                                "argc64",
+                            ))?;
+                            return Ok(GenValue::Scalar(ac64.into()));
+                        }
+                        "arg" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    msg: "`arg` requires 1 index argument".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let i = self.gen_value(&args[0])?.scalar(*span, "arg index")?;
+                            let i = self.coerce(i, &self.i64_ty.into(), *span, "arg index")?;
+                            let i = i.into_int_value();
+                            let ac = bld(self.builder.build_load(
+                                self.i32_ty,
+                                self.aero_argc.as_pointer_value(),
+                                "argc",
+                            ))?;
+                            let ac64 = bld(self.builder.build_int_z_extend(
+                                ac.into_int_value(),
+                                self.i64_ty,
+                                "argc64",
+                            ))?;
+                            let neg = bld(self.builder.build_int_compare(
+                                IntPredicate::SLT,
+                                i,
+                                self.i64_ty.const_zero(),
+                                "i_neg",
+                            ))?;
+                            let ge = bld(self.builder.build_int_compare(
+                                IntPredicate::SGE,
+                                i,
+                                ac64,
+                                "i_ge",
+                            ))?;
+                            let oob = bld(self.builder.build_or(neg, ge, "i_oob"))?;
+                            let ptr_ty = self.context.ptr_type(AddressSpace::from(0u16));
+                            let empty = self.global_string("")?;
+                            let ok_bb = self.context.append_basic_block(self.cur_func, "arg_ok");
+                            let merge_bb = self.context.append_basic_block(self.cur_func, "arg_merge");
+                            let oob_bb = self.builder.get_insert_block().unwrap();
+                            bld(self.builder.build_conditional_branch(oob, merge_bb, ok_bb))?;
+                            self.builder.position_at_end(ok_bb);
+                            let argv = bld(self.builder.build_load(
+                                ptr_ty,
+                                self.aero_argv.as_pointer_value(),
+                                "argv",
+                            ))?;
+                            let argv = argv.into_pointer_value();
+                            let slot = bld(unsafe {
+                                self.builder.build_in_bounds_gep(ptr_ty, argv, &[i], "argv_i")
+                            })?;
+                            let s = bld(self.builder.build_load(ptr_ty, slot, "arg_s"))?;
+                            let s = s.into_pointer_value();
+                            bld(self.builder.build_unconditional_branch(merge_bb))?;
+                            self.builder.position_at_end(merge_bb);
+                            let res = self.builder.build_phi(ptr_ty, "arg_res").map_err(|e| {
+                                CodegenError {
+                                    msg: format!("LLVM IR construction failed: {e}"),
+                                    line: span.line,
+                                    col: span.col,
+                                }
+                            })?;
+                            let e: BasicValueEnum = empty.into();
+                            let sv: BasicValueEnum = s.into();
+                            res.add_incoming(&[(&e, oob_bb), (&sv, ok_bb)]);
+                            return Ok(GenValue::Scalar(res.as_basic_value()));
+                        }
+                        "read_file" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    msg: "`read_file` requires 1 path argument".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let path = self.gen_value(&args[0])?.scalar(*span, "read_file path")?;
+                            let ptr_ty = self.context.ptr_type(AddressSpace::from(0u16));
+                            let mode = self.global_string("rb")?;
+                            let fp = bld(self.builder.build_call(
+                                self.fopen,
+                                &[path.into(), mode.into()],
+                                "fopen",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "fopen returned no value"))?
+                            .into_pointer_value();
+                            let empty = self.global_string("")?;
+                            let zero64 = self.i64_ty.const_zero();
+                            let fp_i = bld(self.builder.build_ptr_to_int(fp, self.i64_ty, "fpi"))?;
+                            let is_null = bld(self.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                fp_i,
+                                zero64,
+                                "fp_null",
+                            ))?;
+                            let ok_bb = self.context.append_basic_block(self.cur_func, "rf_ok");
+                            let merge_bb = self.context.append_basic_block(self.cur_func, "rf_merge");
+                            let oob_bb = self.builder.get_insert_block().unwrap();
+                            bld(self.builder.build_conditional_branch(is_null, merge_bb, ok_bb))?;
+                            self.builder.position_at_end(ok_bb);
+                            // fseek(fp, 0, SEEK_END); size = ftell(fp); fseek(fp, 0, SEEK_SET)
+                            bld(self.builder.build_call(
+                                self.fseek,
+                                &[fp.into(), zero64.into(), self.i32_ty.const_int(2, false).into()],
+                                "fseek_end",
+                            ))?;
+                            let size = bld(self.builder.build_call(self.ftell, &[fp.into()], "ftell"))?
+                                .try_as_basic_value()
+                                .basic()
+                                .ok_or_else(|| self.internal_err(*span, "ftell returned no value"))?
+                                .into_int_value();
+                            bld(self.builder.build_call(
+                                self.fseek,
+                                &[fp.into(), zero64.into(), self.i32_ty.const_zero().into()],
+                                "fseek_set",
+                            ))?;
+                            let one64 = self.i64_ty.const_int(1, false);
+                            let size1 = bld(self.builder.build_int_add(size, one64, "size1"))?;
+                            let buf = bld(self.builder.build_call(
+                                self.malloc,
+                                &[size1.into()],
+                                "rbuf",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "malloc returned no value"))?
+                            .into_pointer_value();
+                            bld(self.builder.build_call(
+                                self.fread,
+                                &[buf.into(), one64.into(), size.into(), fp.into()],
+                                "fread",
+                            ))?;
+                            // buf[size] = 0 (NUL-terminate the returned string)
+                            let endp = bld(unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    self.context.i8_type(),
+                                    buf,
+                                    &[size],
+                                    "rend",
+                                )
+                            })?;
+                            bld(self.builder.build_store(endp, self.context.i8_type().const_zero()))?;
+                            bld(self.builder.build_call(self.fclose, &[fp.into()], "fclose"))?;
+                            bld(self.builder.build_unconditional_branch(merge_bb))?;
+                            self.builder.position_at_end(merge_bb);
+                            let res = self.builder.build_phi(ptr_ty, "rf_res").map_err(|e| {
+                                CodegenError {
+                                    msg: format!("LLVM IR construction failed: {e}"),
+                                    line: span.line,
+                                    col: span.col,
+                                }
+                            })?;
+                            let e: BasicValueEnum = empty.into();
+                            let b: BasicValueEnum = buf.into();
+                            res.add_incoming(&[(&e, oob_bb), (&b, ok_bb)]);
+                            return Ok(GenValue::Scalar(res.as_basic_value()));
+                        }
+                        "write_file" => {
+                            if args.len() != 2 {
+                                return Err(CodegenError {
+                                    msg: "`write_file` requires 2 arguments (path, contents)".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let path = self.gen_value(&args[0])?.scalar(*span, "write_file path")?;
+                            let contents = self.gen_value(&args[1])?.scalar(*span, "write_file contents")?;
+                            let mode = self.global_string("wb")?;
+                            let fp = bld(self.builder.build_call(
+                                self.fopen,
+                                &[path.into(), mode.into()],
+                                "fopen",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "fopen returned no value"))?
+                            .into_pointer_value();
+                            let fail = self.i64_ty.const_int(u64::MAX, false); // -1
+                            let zero64 = self.i64_ty.const_zero();
+                            let fp_i = bld(self.builder.build_ptr_to_int(fp, self.i64_ty, "fpi"))?;
+                            let is_null = bld(self.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                fp_i,
+                                zero64,
+                                "fp_null",
+                            ))?;
+                            let ok_bb = self.context.append_basic_block(self.cur_func, "wf_ok");
+                            let merge_bb = self.context.append_basic_block(self.cur_func, "wf_merge");
+                            let oob_bb = self.builder.get_insert_block().unwrap();
+                            bld(self.builder.build_conditional_branch(is_null, merge_bb, ok_bb))?;
+                            self.builder.position_at_end(ok_bb);
+                            let len = bld(self.builder.build_call(self.strlen, &[contents.into()], "wlen"))?
+                                .try_as_basic_value()
+                                .basic()
+                                .ok_or_else(|| self.internal_err(*span, "strlen returned no value"))?
+                                .into_int_value();
+                            let one64 = self.i64_ty.const_int(1, false);
+                            let written = bld(self.builder.build_call(
+                                self.fwrite,
+                                &[contents.into(), one64.into(), len.into(), fp.into()],
+                                "fwrite",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "fwrite returned no value"))?
+                            .into_int_value();
+                            bld(self.builder.build_call(self.fclose, &[fp.into()], "fclose"))?;
+                            bld(self.builder.build_unconditional_branch(merge_bb))?;
+                            self.builder.position_at_end(merge_bb);
+                            let res = self.builder.build_phi(self.i64_ty, "wf_res").map_err(|e| {
+                                CodegenError {
+                                    msg: format!("LLVM IR construction failed: {e}"),
+                                    line: span.line,
+                                    col: span.col,
+                                }
+                            })?;
+                            let f: BasicValueEnum = fail.into();
+                            let w: BasicValueEnum = written.into();
+                            res.add_incoming(&[(&f, oob_bb), (&w, ok_bb)]);
+                            return Ok(GenValue::Scalar(res.as_basic_value()));
+                        }
+
                         "len" => {
                             if args.len() != 1 {
                                 return Err(CodegenError {
