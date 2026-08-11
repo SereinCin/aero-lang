@@ -722,6 +722,55 @@ fn aero_build_single_file_produces_exe() {
     assert_eq!(stdout(&run_out), "3\n");
     let _ = std::fs::remove_dir_all(&root);
 }
+#[test]
+fn aero_file_io_and_cli_args_in_aot_exe() {
+    // M1.2: read_file/write_file + arg_count/arg in a standalone AOT exe run
+    // with command-line arguments.
+    let root = std::env::temp_dir().join(format!("aero_m12_io_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let src = root.join("io.aero");
+    std::fs::write(
+        &src,
+        "print(\"argc=%lld\\n\", arg_count());\n\
+if (arg_count() > 1) {\n\
+    print(\"arg1=%s\\n\", arg(1));\n\
+}\n\
+let w = write_file(\"out.txt\", \"hello file\\n\");\n\
+print(\"wrote=%lld\\n\", w);\n\
+let contents = read_file(\"out.txt\");\n\
+print(\"len=%lld\\n\", len(contents));\n\
+print(\"content=%s\\n\", contents);\n",
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_aero");
+    let out = Command::new(bin).args(["build", src.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "build failed: {}", String::from_utf8_lossy(&out.stderr));
+    let exe = root.join("io.exe");
+    assert!(exe.exists(), "exe not produced: {}", exe.display());
+    let run_out = Command::new(&exe)
+        .current_dir(&root)
+        .args(["alpha", "beta"])
+        .output()
+        .unwrap();
+    assert!(run_out.status.success(), "exe run failed: {}", String::from_utf8_lossy(&run_out.stderr));
+    let expected = "argc=3\narg1=alpha\nwrote=11\nlen=11\ncontent=hello file\n\n";
+    assert_eq!(stdout(&run_out), expected);
+    // the file was actually written by the exe
+    let file = root.join("out.txt");
+    assert!(file.exists(), "out.txt was not written");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello file\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn aero_cli_args_via_jit_are_zero() {
+    // JIT runs main(argc=0, argv=null): arg_count() must report 0.
+    let out = run_aero("print(\"%lld\\n\", arg_count());\n");
+    assert!(out.status.success(), "run failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout(&out), "0\n");
+}
+
 // ---------- Campaign 5: FFI (extern "C" + [link] linking external libs) ----------
 
 #[test]

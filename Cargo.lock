@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aero-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aero-ir",
  "aero-pm",
@@ -12,14 +12,14 @@ dependencies = [
 
 [[package]]
 name = "aero-hir"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aero-parse",
 ]
 
 [[package]]
 name = "aero-ir"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aero-hir",
  "aero-lex",
@@ -29,21 +29,21 @@ dependencies = [
 
 [[package]]
 name = "aero-lex"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "aero-parse"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aero-lex",
 ]
 
 [[package]]
 name = "aero-pm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aero-hir",
  "aero-ir",

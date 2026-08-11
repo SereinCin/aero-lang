@@ -129,7 +129,7 @@ fn cmd_new(name: &str) -> u8 {
         return 1;
     }
     let toml = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+        "[package]\nname = \"{name}\"\nversion = \"0.1.1\"\nedition = \"2024\"\n"
     );
     let main = "print(\"Hello, Aero!\\n\");\n";
     if std::fs::write(root.join("Aero.toml"), toml).is_err()
