@@ -1,0 +1,16 @@
+[package]
+name = "aero-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aero"
+path = "src/main.rs"
+
+[dependencies]
+aero-ir = { path = "../aero-ir" }
+aero-pm = { path = "../aero-pm" }
+aero-fmt = { path = "../aero-fmt" }
+aero-clippy = { path = "../aero-clippy" }
+aero-parse = { path = "../aero-parse" }
