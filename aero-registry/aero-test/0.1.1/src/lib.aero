@@ -1,0 +1,53 @@
+// aero-test: Test utilities
+// Simple assertion helpers
+
+// Assert that a condition is true, with a message
+fn assert_true(cond: bool, msg: str) {
+    if (!cond) {
+        print("FAIL: %s\n", msg);
+    } else {
+        print("PASS: %s\n", msg);
+    }
+}
+
+// Assert that two i64 values are equal
+fn assert_eq_i64(got: i64, expected: i64, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got %lld, expected %lld)\n", msg, got, expected);
+    }
+}
+
+// Assert that two i32 values are equal
+fn assert_eq_i32(got: i32, expected: i32, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got %lld, expected %lld)\n", msg, got, expected);
+    }
+}
+
+// Assert that two strings are equal
+fn assert_eq_str(got: str, expected: str, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got '%s', expected '%s')\n", msg, got, expected);
+    }
+}
+
+// Print a test group header
+fn test_group(name: str) {
+    print("\n=== %s ===\n", name);
+}
+
+// Print a test summary with pass/fail counts
+fn test_summary(passed: i64, failed: i64) {
+    print("\n--- summary: %lld passed, %lld failed ---\n", passed, failed);
+    if (failed == 0) {
+        print("ALL TESTS PASSED\n");
+    } else {
+        print("SOME TESTS FAILED\n");
+    }
+}

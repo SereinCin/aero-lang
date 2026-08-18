@@ -1,0 +1,106 @@
+// aero-regex: Regular expression matching via POSIX regex FFI
+// Requires libregex or system libc regex (link: regex)
+// Provides pattern compilation, matching, and capture groups.
+
+// POSIX regex API
+// regex_t is an opaque struct; we use a fixed-size buffer (*i32) for the handle
+extern "C" fn regcomp(preg: *i32, pattern: str, cflags: i32) -> i32;
+extern "C" fn regexec(preg: *i32, string: str, nmatch: i64, pmatch: *i32, eflags: i32) -> i32;
+extern "C" fn regfree(preg: *i32);
+extern "C" fn regerror(errcode: i32, preg: *i32, buf: str, bufsz: i64) -> i64;
+
+// Compilation flags
+const REG_EXTENDED: i32 = 1;
+const REG_ICASE: i32 = 4;
+const REG_NOSUB: i32 = 8;
+
+// Execution flags
+const REG_NOTBOL: i32 = 1;
+const REG_NOTEOL: i32 = 2;
+
+// Regex match result
+struct RegexMatch {
+    matched: bool,
+    // Start and end positions of the first match
+    start: i64,
+    end: i64,
+}
+
+// Compiled regex handle
+// preg is an opaque buffer of 64 bytes
+struct Regex {
+    preg: [i32; 16], // 16 * 4 = 64 bytes
+    valid: bool,
+}
+
+// Compile a regular expression
+fn regex_compile(pattern: str) -> Regex {
+    let mut r = Regex { preg: [0; 16], valid: false };
+    let rc = regcomp(r.preg, pattern, REG_EXTENDED);
+    if (rc == 0) {
+        r.valid = true;
+    } else {
+        // Get error message
+        let mut errbuf = "";
+        let mut i: i64 = 0;
+        while (i < 128) {
+            errbuf = errbuf + 0;
+            i = i + 1;
+        }
+        regerror(rc, r.preg, errbuf, 128);
+        print("regex compile error: %s\n", errbuf);
+    }
+    return r;
+}
+
+// Check if a regex matches a string
+fn regex_is_match(re: Regex, text: str) -> bool {
+    if (!re.valid) {
+        return false;
+    }
+    let rc = regexec(re.preg, text, 0, 0, 0);
+    return rc == 0;
+}
+
+// Find the first match in a string
+fn regex_find(re: Regex, text: str) -> RegexMatch {
+    if (!re.valid) {
+        return RegexMatch { matched: false, start: 0, end: 0 };
+    }
+    // pmatch[0].rm_so, pmatch[0].rm_eo
+    let mut pmatch: [i32; 2] = [0; 2];
+    let rc = regexec(re.preg, text, 1, pmatch, 0);
+    if (rc == 0) {
+        return RegexMatch { matched: true, start: pmatch[0], end: pmatch[1] };
+    }
+    return RegexMatch { matched: false, start: 0, end: 0 };
+}
+
+// Free a compiled regex
+fn regex_free(re: Regex) {
+    if (re.valid) {
+        regfree(re.preg);
+    }
+}
+
+// Simple test: check if a string matches a pattern
+fn regex_test(pattern: str, text: str) -> bool {
+    let re = regex_compile(pattern);
+    let result = regex_is_match(re, text);
+    regex_free(re);
+    return result;
+}
+
+// Extract the matched substring
+fn regex_group(text: str, m: RegexMatch) -> str {
+    if (!m.matched) {
+        return "";
+    }
+    let mut result = "";
+    let mut i = m.start;
+    while (i < m.end) {
+        result = result + text.at(i);
+        i = i + 1;
+    }
+    return result;
+}

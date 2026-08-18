@@ -1,0 +1,108 @@
+// aero-crypto
+// OpenSSL bindings for SHA-256 hashing and hex encoding.
+//
+// sha256_hash() uses the one-shot SHA256 convenience function and
+// returns the digest as a lowercase hex string.
+
+extern "C" fn SHA256(data: str, len: i64, md: *i32) -> *i32;
+
+const SHA256_DIGEST_LENGTH: i64 = 32;
+
+// A single byte (0-255) → two lowercase hex chars.
+fn hex_byte(b: i32) -> str {
+    let hex_chars = String::from("0123456789abcdef");
+    let hi = (b >> 4) & 15;
+    let lo = b & 15;
+    return format("%c", hex_chars.at(hi)) + format("%c", hex_chars.at(lo));
+}
+
+// Byte buffer → lowercase hex string. Each byte → two hex chars.
+fn hex_encode(data: str, len: i64) -> str {
+    let src = String::from(data);
+    let hex_chars = String::from("0123456789abcdef");
+    let result = "";
+    let i = 0;
+    while (i < len) {
+        let byte = src.at(i);
+        let hi = (byte >> 4) & 15;
+        let lo = byte & 15;
+        result = result + format("%c", hex_chars.at(hi));
+        result = result + format("%c", hex_chars.at(lo));
+        i = i + 1;
+    }
+    return result;
+}
+
+// Alias kept for callers that prefer the short name.
+fn sha256(input: str) -> str {
+    return sha256_hash(input);
+}
+
+// One-shot SHA-256 via OpenSSL's SHA256() function.
+// Aero `str` is a NUL-terminated C string, so it cannot hold the raw 32-byte
+// digest (embedded NUL bytes truncate it). We pass a fixed 32-element i32
+// array as the writable output buffer (SHA256 fills its low bytes), then
+// hex-encode each byte directly from the array.
+fn sha256_hash(input: str) -> str {
+    let digest: [i32; 32] = [0; 32];
+    let result = SHA256(input, len(input), digest);
+    if (result == 0) {
+        return "";
+    }
+    let out = "";
+    let i = 0;
+    // SHA256 fills the buffer as raw bytes, so each i32 element holds 4 digest
+    // bytes (byte 4i..4i+3 at bit 0,8,16,24). Extract all 4 per element.
+    while (i < 8) {
+        let e = digest[i];
+        out = out + hex_byte(e & 255);
+        out = out + hex_byte((e >> 8) & 255);
+        out = out + hex_byte((e >> 16) & 255);
+        out = out + hex_byte((e >> 24) & 255);
+        i = i + 1;
+    }
+    return out;
+}
+
+// XOR obfuscation. NOT cryptographic security — don't use this
+// for anything real. It's here for the "I need to hide a string
+// from casual eyeballs" case.
+// Note: Aero `str` is a NUL-terminated C string, so XOR output that
+// contains a 0 byte cannot round-trip back through `str`. Use data/keys
+// whose XOR never yields 0 (e.g. printable ASCII).
+fn xor_obfuscate(data: str, key: str) -> str {
+    let d = String::from(data);
+    let kk = String::from(key);
+    let klen = kk.len();
+    let result = "";
+    let i = 0;
+    while (i < d.len()) {
+        let k = 0;
+        if (klen > 0) {
+            k = kk.at(i % klen);
+        }
+        result = result + format("%c", d.at(i) ^ k);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Constant-time comparison. XORs every byte, ORs the results.
+// If any byte differs, the final result is non-zero.
+// This prevents timing attacks on password/token comparison.
+fn constant_time_eq(a: str, b: str) -> bool {
+    let aa = String::from(a);
+    let bb = String::from(b);
+    let al = aa.len();
+    let bl = bb.len();
+    if (al != bl) {
+        return false;
+    }
+    let result = 0;
+    let i = 0;
+    while (i < al) {
+        result = result | (aa.at(i) ^ bb.at(i));
+        i = i + 1;
+    }
+    return result == 0;
+}

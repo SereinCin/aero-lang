@@ -1,0 +1,86 @@
+// aero-io
+// File I/O via C stdio FFI. fopen/fclose/fgetc, nothing fancy.
+// The extern declarations are a bit repetitive — waiting for the
+// day we can auto-generate these from C headers.
+
+extern "C" fn fopen(path: str, mode: str) -> *i32;
+extern "C" fn fclose(fp: *i32) -> i32;
+extern "C" fn fgetc(fp: *i32) -> i32;
+extern "C" fn feof(fp: *i32) -> i32;
+
+// Read the whole file into a string as text. One char at a time.
+// Not fast, but correct. Speed doesn't matter for small files.
+// (Note: the compiler also ships a builtin `read_file` that reads
+// binary; this one is text-mode and kept under a distinct name.)
+fn read_text_file(path: str) -> str {
+    let fp = fopen(path, "r");
+    if (fp == 0) {
+        return "";
+    }
+    let content = "";
+    let ch = fgetc(fp);
+    while (ch != -1) {
+        content = content + format("%c", ch);
+        ch = fgetc(fp);
+    }
+    fclose(fp);
+    return content;
+}
+
+// Try to open the file. If it succeeds, it exists. Close and return true.
+// Race condition if the file is deleted between open and close, but
+// that's pathological. (The compiler also ships a builtin `file_exists`;
+// this one opens in text mode and is kept under a distinct name.)
+fn path_exists(path: str) -> bool {
+    let fp = fopen(path, "r");
+    if (fp == 0) {
+        return false;
+    }
+    fclose(fp);
+    return true;
+}
+
+// "foo/bar/baz.txt" → "txt". Returns "" if no dot found.
+fn file_extension(path: str) -> str {
+    let p = String::from(path);
+    let n = p.len();
+    let dot_pos = -1;
+    let i = 0;
+    while (i < n) {
+        if (p.at(i) == 46) {
+            dot_pos = i;
+        }
+        i = i + 1;
+    }
+    if (dot_pos < 0) {
+        return "";
+    }
+    let ext = "";
+    let j = dot_pos + 1;
+    while (j < n) {
+        ext = ext + format("%c", p.at(j));
+        j = j + 1;
+    }
+    return ext;
+}
+
+// "foo/bar/baz.txt" → "baz.txt". Handles both / and \.
+fn basename(path: str) -> str {
+    let p = String::from(path);
+    let n = p.len();
+    let sep_pos = -1;
+    let i = 0;
+    while (i < n) {
+        if (p.at(i) == 47 || p.at(i) == 92) {
+            sep_pos = i;
+        }
+        i = i + 1;
+    }
+    let result = "";
+    let j = sep_pos + 1;
+    while (j < n) {
+        result = result + format("%c", p.at(j));
+        j = j + 1;
+    }
+    return result;
+}

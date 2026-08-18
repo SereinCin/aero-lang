@@ -1,0 +1,1288 @@
+// ===== Aero standard library core =====
+// Auto-injected ahead of every compilation unit by the compiler front-end.
+// Defines Option/Result (error handling).
+//
+// Memory note: `str` is a malloc-managed buffer provided by the string runtime.
+// This file only defines types + methods; it has no top-level side effects.
+
+// ---------- Option<T> ----------
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    fn is_some(o: Option<T>) -> bool {
+        match (o) {
+            Some(x) => { return true; }
+            None => { return false; }
+        }
+        return false;
+    }
+
+    fn is_none(o: Option<T>) -> bool {
+        match (o) {
+            Some(x) => { return false; }
+            None => { return true; }
+        }
+        return false;
+    }
+
+    // Returns the inner value; falls back to `def` when None.
+    fn unwrap_or(o: Option<T>, def: T) -> T {
+        match (o) {
+            Some(v) => { return v; }
+            None => { return def; }
+        }
+        return def;
+    }
+}
+
+// ---------- Result<T, E> ----------
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    fn is_ok(r: Result<T, E>) -> bool {
+        match (r) {
+            Ok(x) => { return true; }
+            Err(e) => { return false; }
+        }
+        return false;
+    }
+
+    fn is_err(r: Result<T, E>) -> bool {
+        match (r) {
+            Ok(x) => { return false; }
+            Err(e) => { return true; }
+        }
+        return false;
+    }
+
+    fn unwrap_or(r: Result<T, E>, def: T) -> T {
+        match (r) {
+            Ok(v) => { return v; }
+            Err(e) => { return def; }
+        }
+        return def;
+    }
+
+    fn unwrap_err_or(r: Result<T, E>, def: E) -> E {
+        match (r) {
+            Ok(v) => { return def; }
+            Err(e) => { return e; }
+        }
+        return def;
+    }
+}
+
+// ---------- Copy / Clone marker traits ----------
+// `Copy` is a marker: a type that explicitly implements it (via `impl Copy for X {}`)
+// is duplicated by bitwise copy instead of being moved. `Clone` is reserved for the
+// clone() functionality (hand-written impls; derive(Clone) is not yet generated).
+trait Copy { }
+trait Clone { }
+
+// ---------- Drop / RAII ----------
+// A type that implements `Drop` gets its `drop(x: &mut Self)` method called
+// automatically when a value goes out of scope (block end / function return), in
+// reverse declaration order. A value that has been *moved* does not get dropped
+// (ownership was transferred to the new owner, which drops it instead).
+trait Drop {
+    fn drop(x: &mut Self);
+}
+
+// ---------- Iteration ----------
+// `for x in iter` desugars to the `IntoIterator` protocol:
+//   let it = iter.into_iter();
+//   loop { match it.next() { Some(x) => body, None => break } }
+// Native `Vec<T>` / `String` / arrays are recognized by the compiler and iterate
+// directly; user-defined types implement these traits to support `for`.
+trait Iterator {
+    type Item;
+    fn next(it: &mut Self) -> Option<Self::Item>;
+}
+
+trait IntoIterator {
+    type IntoIter;
+    fn into_iter(it: Self) -> Self::IntoIter;
+}
+
+// ---------- Operator overloading ----------
+// Non-numeric types overload arithmetic/comparison operators by implementing
+// these traits. The compiler desugars:
+//   `a + b`  ->  `Add::add(a, b)`    (result type = `Output`)
+//   `a == b` ->  `Eq::eq(a, b)`      (`!=` is `!eq`)
+//   `a < b`  ->  `Ord::lt(a, b)`     (`>`/`<=`/`>=` are derived from `lt`
+//                                      by operand swap / negation at codegen)
+trait Add<RHS, Output> {
+    fn add(lhs: Self, rhs: RHS) -> Output;
+}
+
+trait Eq<RHS> {
+    fn eq(lhs: Self, rhs: RHS) -> bool;
+}
+
+trait Ord<RHS> {
+    fn lt(lhs: Self, rhs: RHS) -> bool;
+}
+
+// ---------- HashMap / HashSet (Phase 11.1) ----------
+// A hash map with `i64` keys and any value type `V`, and a set of `i64` built on
+// top of it. Implemented in the Aero language itself on top of the native `Vec`
+// and the built-in hash functions (`hash_i64` / `str_hash`).
+//
+// Layout (open addressing with linear probing):
+//   - `keys` / `vals` / `alive`: parallel arrays of the live entries (alive[i]==1
+//     marks entry i as in use; removed entries are marked alive[i]==0).
+//   - `idxs`: the probe table. `idxs[slot]` is the entry index stored at that
+//     slot, `-1` = empty, `-2` = tombstone (an entry was removed here).
+//   - `len`: number of live entries.
+// Methods: insert / get / contains / remove / len / is_empty.
+
+struct HashMap<V> {
+    keys: Vec<i64>,
+    vals: Vec<V>,
+    alive: Vec<i64>,
+    idxs: Vec<i64>,
+    len: i64,
+}
+
+fn hash_map_new<V>() -> HashMap<V> {
+    return HashMap { keys: Vec::new(), vals: Vec::new(), alive: Vec::new(), idxs: Vec::new(), len: 0 };
+}
+
+// Rebuild the probe table in place (capacity doubles, then all live entries are
+// re-inserted). Called automatically when the load factor exceeds 1/2.
+fn hash_map_rehash<V>(m: &mut HashMap<V>) {
+    let old_cap = m.idxs.len();
+    let new_cap = old_cap * 2;
+    let i = 0;
+    while (i < new_cap - old_cap) {
+        m.idxs.push(-1);
+        i = i + 1;
+    }
+    let ci = 0;
+    while (ci < old_cap) {
+        m.idxs.set(ci, -1);
+        ci = ci + 1;
+    }
+    let j = 0;
+    while (j < m.keys.len()) {
+        if (m.alive.get(j) == 1) {
+            let k = m.keys.get(j);
+            let h = hash_i64(k);
+            let slot = (h % new_cap + new_cap) % new_cap;
+            while (m.idxs.get(slot) != -1) {
+                slot = (slot + 1) % new_cap;
+            }
+            m.idxs.set(slot, j);
+        }
+        j = j + 1;
+    }
+}
+
+impl<V> HashMap<V> {
+    fn len(m: HashMap<V>) -> i64 {
+        return m.len;
+    }
+
+    fn is_empty(m: HashMap<V>) -> bool {
+        return m.len == 0;
+    }
+
+    // Insert `k -> v`, overwriting any existing value for `k`.
+    fn insert(m: &mut HashMap<V>, k: i64, v: V) {
+        if (m.idxs.len() == 0) {
+            let i = 0;
+            while (i < 16) {
+                m.idxs.push(-1);
+                i = i + 1;
+            }
+        }
+        while (m.keys.len() * 2 >= m.idxs.len()) {
+            hash_map_rehash(m);
+        }
+        let n = m.idxs.len();
+        let h = hash_i64(k);
+        let slot = (h % n + n) % n;
+        let reuse = -1;
+        while (m.idxs.get(slot) != -1) {
+            let e = m.idxs.get(slot);
+            if (e >= 0) {
+                if (m.keys.get(e) == k) {
+                    m.vals.set(e, v);
+                    return;
+                }
+            } else {
+                if (reuse == -1) {
+                    reuse = slot;
+                }
+            }
+            slot = (slot + 1) % n;
+        }
+        m.keys.push(k);
+        m.vals.push(v);
+        m.alive.push(1);
+        let at = m.keys.len() - 1;
+        if (reuse >= 0) {
+            m.idxs.set(reuse, at);
+        } else {
+            m.idxs.set(slot, at);
+        }
+        m.len = m.len + 1;
+    }
+
+    // Look up `k`, returning the stored value or `def` when absent.
+    fn get(m: &mut HashMap<V>, k: i64, def: V) -> V {
+        if (m.idxs.len() == 0) { return def; }
+        let n = m.idxs.len();
+        let h = hash_i64(k);
+        let slot = (h % n + n) % n;
+        let probes = 0;
+        while (probes < n) {
+            let e = m.idxs.get(slot);
+            if (e == -1) { return def; }
+            if (e >= 0) {
+                if (m.keys.get(e) == k) {
+                    return m.vals.get(e);
+                }
+            }
+            slot = (slot + 1) % n;
+            probes = probes + 1;
+        }
+        return def;
+    }
+
+    // Whether `k` is present in the map.
+    fn contains(m: &mut HashMap<V>, k: i64) -> bool {
+        if (m.idxs.len() == 0) { return false; }
+        let n = m.idxs.len();
+        let h = hash_i64(k);
+        let slot = (h % n + n) % n;
+        let probes = 0;
+        while (probes < n) {
+            let e = m.idxs.get(slot);
+            if (e == -1) { return false; }
+            if (e >= 0) {
+                if (m.keys.get(e) == k) { return true; }
+            }
+            slot = (slot + 1) % n;
+            probes = probes + 1;
+        }
+        return false;
+    }
+
+    // Remove `k`; returns whether it was present.
+    fn remove(m: &mut HashMap<V>, k: i64) -> bool {
+        if (m.idxs.len() == 0) { return false; }
+        let n = m.idxs.len();
+        let h = hash_i64(k);
+        let slot = (h % n + n) % n;
+        let probes = 0;
+        while (probes < n) {
+            let e = m.idxs.get(slot);
+            if (e == -1) { return false; }
+            if (e >= 0) {
+                if (m.keys.get(e) == k) {
+                    m.alive.set(e, 0);
+                    m.idxs.set(slot, -2);
+                    m.len = m.len - 1;
+                    return true;
+                }
+            }
+            slot = (slot + 1) % n;
+            probes = probes + 1;
+        }
+        return false;
+    }
+}
+
+// ---------- HashSet (Phase 11.1) ----------
+// A set of `i64` values, backed by a `HashMap` whose values are ignored.
+struct HashSet {
+    map: HashMap<i64>,
+}
+
+fn hash_set_new() -> HashSet {
+    return HashSet { map: hash_map_new() };
+}
+
+impl HashSet {
+    fn len(s: HashSet) -> i64 {
+        return s.map.len();
+    }
+
+    fn is_empty(s: HashSet) -> bool {
+        return s.map.is_empty();
+    }
+
+    fn insert(s: &mut HashSet, k: i64) {
+        s.map.insert(k, k);
+    }
+
+    fn contains(s: &mut HashSet, k: i64) -> bool {
+        return s.map.contains(k);
+    }
+
+    fn remove(s: &mut HashSet, k: i64) -> bool {
+        return s.map.remove(k);
+    }
+}
+
+// ---------- BTreeMap<K, V> (Phase 1 collections) ----------
+// An ordered map with `i64` keys, stored as two parallel sorted arrays (`keys` /
+// `vals`). Lookup uses binary search (O(log n)); insertion keeps the arrays
+// sorted by bubbling the new key down to its position (O(n) worst case). This
+// gives deterministic iteration order and ordered range queries, complementing
+// the unordered `HashMap`.
+struct BTreeMap {
+    keys: Vec<i64>,
+    vals: Vec<i64>,
+    len: i64,
+}
+
+fn btree_map_new() -> BTreeMap {
+    return BTreeMap { keys: Vec::new(), vals: Vec::new(), len: 0 };
+}
+
+// Binary search over the sorted `keys` array; returns the index of `k` or -1.
+fn btree_find(m: &mut BTreeMap, k: i64) -> i64 {
+    let lo = 0;
+    let hi = m.len - 1;
+    while (lo <= hi) {
+        let mid = (lo + hi) / 2;
+        let kv = m.keys.get(mid);
+        if (kv == k) { return mid; }
+        if (kv < k) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return -1;
+}
+
+// First index `i` where keys[i] > k (insertion point), or m.len when k is largest.
+fn btree_lower_bound(m: &mut BTreeMap, k: i64) -> i64 {
+    let lo = 0;
+    let hi = m.len;
+    while (lo < hi) {
+        let mid = (lo + hi) / 2;
+        if (m.keys.get(mid) < k) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+impl BTreeMap {
+    fn len(m: BTreeMap) -> i64 {
+        return m.len;
+    }
+
+    fn is_empty(m: BTreeMap) -> bool {
+        return m.len == 0;
+    }
+
+    // Insert `k -> v`, overwriting any existing value for `k`.
+    fn insert(m: &mut BTreeMap, k: i64, v: i64) {
+        let at = btree_find(m, k);
+        if (at >= 0) {
+            m.vals.set(at, v);
+            return;
+        }
+        let pos = btree_lower_bound(m, k);
+        m.keys.push(k);
+        m.vals.push(v);
+        // Bubble the new entry down from the end to `pos`.
+        let i = m.len;
+        while (i > pos) {
+            m.keys.set(i, m.keys.get(i - 1));
+            m.vals.set(i, m.vals.get(i - 1));
+            m.keys.set(i - 1, k);
+            m.vals.set(i - 1, v);
+            i = i - 1;
+        }
+        m.len = m.len + 1;
+    }
+
+    // Look up `k`, returning the stored value or `def` when absent.
+    fn get(m: &mut BTreeMap, k: i64, def: i64) -> i64 {
+        let at = btree_find(m, k);
+        if (at < 0) { return def; }
+        return m.vals.get(at);
+    }
+
+    // Whether `k` is present in the map.
+    fn contains(m: &mut BTreeMap, k: i64) -> bool {
+        return btree_find(m, k) >= 0;
+    }
+
+    // Remove `k`; returns whether it was present.
+    fn remove(m: &mut BTreeMap, k: i64) -> bool {
+        let at = btree_find(m, k);
+        if (at < 0) { return false; }
+        let i = at;
+        while (i < m.len - 1) {
+            m.keys.set(i, m.keys.get(i + 1));
+            m.vals.set(i, m.vals.get(i + 1));
+            i = i + 1;
+        }
+        m.keys.pop();
+        m.vals.pop();
+        m.len = m.len - 1;
+        return true;
+    }
+
+    // The keys in ascending order (a fresh copy).
+    fn keys(m: &mut BTreeMap) -> Vec<i64> {
+        let out = Vec::new();
+        let i = 0;
+        while (i < m.len) {
+            out.push(m.keys.get(i));
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+// ---------- BTreeSet (Phase 1 collections) ----------
+// An ordered set of `i64` values, backed by a `BTreeMap` whose values are
+// ignored (the key itself is stored as its own value).
+struct BTreeSet {
+    map: BTreeMap,
+}
+
+fn btree_set_new() -> BTreeSet {
+    return BTreeSet { map: btree_map_new() };
+}
+
+impl BTreeSet {
+    fn len(s: BTreeSet) -> i64 {
+        return s.map.len();
+    }
+
+    fn is_empty(s: BTreeSet) -> bool {
+        return s.map.is_empty();
+    }
+
+    fn insert(s: &mut BTreeSet, k: i64) {
+        s.map.insert(k, k);
+    }
+
+    fn contains(s: &mut BTreeSet, k: i64) -> bool {
+        return s.map.contains(k);
+    }
+
+    fn remove(s: &mut BTreeSet, k: i64) -> bool {
+        return s.map.remove(k);
+    }
+
+    // The elements in ascending order.
+    fn to_vec(s: &mut BTreeSet) -> Vec<i64> {
+        return s.map.keys();
+    }
+}
+
+// ---------- Sorting / searching algorithms (Phase 1 stdlib) ----------
+// Pure-Aero implementations operating on native `Vec<i64>`.
+
+// In-place quicksort (Hoare partition) on `[lo, hi]`.
+fn _qsort(v: &mut Vec<i64>, lo: i64, hi: i64) {
+    if (lo >= hi) { return; }
+    let pivot = v.get(hi);
+    let i = lo;
+    let j = lo;
+    while (j < hi) {
+        if (v.get(j) < pivot) {
+            let t = v.get(i);
+            v.set(i, v.get(j));
+            v.set(j, t);
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    let t = v.get(i);
+    v.set(i, v.get(hi));
+    v.set(hi, t);
+    _qsort(v, lo, i - 1);
+    _qsort(v, i + 1, hi);
+}
+
+// Sort `v` in ascending order in place.
+fn sort(v: &mut Vec<i64>) {
+    _qsort(v, 0, v.len() - 1);
+}
+
+// Binary search for `target` in a sorted `v`; returns the index or -1.
+fn binary_search(v: &mut Vec<i64>, target: i64) -> i64 {
+    let lo = 0;
+    let hi = v.len() - 1;
+    while (lo <= hi) {
+        let mid = (lo + hi) / 2;
+        let mv = v.get(mid);
+        if (mv == target) { return mid; }
+        if (mv < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return -1;
+}
+
+// Reverse `v` in place.
+fn reverse(v: &mut Vec<i64>) {
+    let lo = 0;
+    let hi = v.len() - 1;
+    while (lo < hi) {
+        let t = v.get(lo);
+        v.set(lo, v.get(hi));
+        v.set(hi, t);
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+}
+
+// ---------- LinkedList<T> (Phase 1 collections) ----------
+// A doubly-linked list backed by index-based nodes stored in a `Vec`. Each node
+// keeps its `prev`/`next` index (-1 = sentinel). Removed node slots are recycled
+// through a free stack, so repeated push/pop never rebuilds storage. Interior
+// ops (get/set/remove) are O(n) index traversal; end ops are O(1).
+struct LinkedList<T> {
+    vals: Vec<T>,   // node values (index i = node i)
+    prev: Vec<i64>, // prev index of node i, or -1
+    next: Vec<i64>, // next index of node i, or -1
+    head: i64,      // index of the first node, or -1
+    tail: i64,      // index of the last node, or -1
+    frees: Vec<i64>,// recycled node slots
+    len: i64,
+}
+
+fn linked_list_new<T>() -> LinkedList<T> {
+    return LinkedList {
+        vals: Vec::new(),
+        prev: Vec::new(),
+        next: Vec::new(),
+        head: -1,
+        tail: -1,
+        frees: Vec::new(),
+        len: 0,
+    };
+}
+
+// Allocate a node index, reusing a recycled slot when available.
+fn ll_alloc<T>(l: &mut LinkedList<T>, v: T) -> i64 {
+    if (l.frees.is_empty()) {
+        let idx = l.vals.len();
+        l.vals.push(v);
+        l.prev.push(0);
+        l.next.push(0);
+        return idx;
+    }
+    let idx = l.frees.pop();
+    l.vals.set(idx, v);
+    return idx;
+}
+
+// Recycle a node index for later reuse.
+fn ll_free<T>(l: &mut LinkedList<T>, idx: i64) {
+    l.frees.push(idx);
+}
+
+impl<T> LinkedList<T> {
+    fn len(l: LinkedList<T>) -> i64 {
+        return l.len;
+    }
+
+    fn is_empty(l: LinkedList<T>) -> bool {
+        return l.len == 0;
+    }
+
+    // View the first element without removing it.
+    fn front(l: &mut LinkedList<T>) -> Option<T> {
+        if (l.head == -1) { return Option::None; }
+        return Option::Some(l.vals.get(l.head));
+    }
+
+    // View the last element without removing it.
+    fn back(l: &mut LinkedList<T>) -> Option<T> {
+        if (l.tail == -1) { return Option::None; }
+        return Option::Some(l.vals.get(l.tail));
+    }
+
+    // Prepend `v` in O(1).
+    fn push_front(l: &mut LinkedList<T>, v: T) {
+        let idx = ll_alloc(l, v);
+        l.prev.set(idx, -1);
+        l.next.set(idx, l.head);
+        if (l.tail == -1) {
+            l.tail = idx;
+        } else {
+            l.prev.set(l.head, idx);
+        }
+        l.head = idx;
+        l.len = l.len + 1;
+    }
+
+    // Append `v` in O(1).
+    fn push_back(l: &mut LinkedList<T>, v: T) {
+        let idx = ll_alloc(l, v);
+        l.prev.set(idx, l.tail);
+        l.next.set(idx, -1);
+        if (l.head == -1) {
+            l.head = idx;
+        } else {
+            l.next.set(l.tail, idx);
+        }
+        l.tail = idx;
+        l.len = l.len + 1;
+    }
+
+    // Remove and return the first element.
+    fn pop_front(l: &mut LinkedList<T>) -> Option<T> {
+        if (l.head == -1) { return Option::None; }
+        let idx = l.head;
+        let v = l.vals.get(idx);
+        let nx = l.next.get(idx);
+        if (nx == -1) {
+            l.tail = -1;
+        } else {
+            l.prev.set(nx, -1);
+        }
+        l.head = nx;
+        ll_free(l, idx);
+        l.len = l.len - 1;
+        return Option::Some(v);
+    }
+
+    // Remove and return the last element.
+    fn pop_back(l: &mut LinkedList<T>) -> Option<T> {
+        if (l.tail == -1) { return Option::None; }
+        let idx = l.tail;
+        let v = l.vals.get(idx);
+        let pv = l.prev.get(idx);
+        if (pv == -1) {
+            l.head = -1;
+        } else {
+            l.next.set(pv, -1);
+        }
+        l.tail = pv;
+        ll_free(l, idx);
+        l.len = l.len - 1;
+        return Option::Some(v);
+    }
+
+    // Read the element at 0-based position `i` (walking from the head), or `def`.
+    fn get(l: &mut LinkedList<T>, i: i64, def: T) -> T {
+        if (i < 0 || i >= l.len) { return def; }
+        let cur = l.head;
+        let j = 0;
+        while (j < i) {
+            cur = l.next.get(cur);
+            j = j + 1;
+        }
+        return l.vals.get(cur);
+    }
+
+    // Overwrite the element at position `i`; returns whether `i` was in range.
+    fn set(l: &mut LinkedList<T>, i: i64, v: T) -> bool {
+        if (i < 0 || i >= l.len) { return false; }
+        let cur = l.head;
+        let j = 0;
+        while (j < i) {
+            cur = l.next.get(cur);
+            j = j + 1;
+        }
+        l.vals.set(cur, v);
+        return true;
+    }
+
+    // Remove the element at position `i`; returns whether `i` was in range.
+    fn remove(l: &mut LinkedList<T>, i: i64) -> bool {
+        if (i < 0 || i >= l.len) { return false; }
+        let cur = l.head;
+        let j = 0;
+        while (j < i) {
+            cur = l.next.get(cur);
+            j = j + 1;
+        }
+        let pv = l.prev.get(cur);
+        let nx = l.next.get(cur);
+        if (pv == -1) { l.head = nx; } else { l.next.set(pv, nx); }
+        if (nx == -1) { l.tail = pv; } else { l.prev.set(nx, pv); }
+        ll_free(l, cur);
+        l.len = l.len - 1;
+        return true;
+    }
+
+    // Reverse the list in place.
+    fn reverse(l: &mut LinkedList<T>) {
+        let cur = l.head;
+        while (cur != -1) {
+            let nx = l.next.get(cur);
+            let pv = l.prev.get(cur);
+            l.next.set(cur, pv);
+            l.prev.set(cur, nx);
+            cur = nx;
+        }
+        let h = l.head;
+        l.head = l.tail;
+        l.tail = h;
+    }
+
+    // Drop all elements, recycling every node slot.
+    fn clear(l: &mut LinkedList<T>) {
+        let i = 0;
+        while (i < l.vals.len()) {
+            l.frees.push(i);
+            i = i + 1;
+        }
+        l.head = -1;
+        l.tail = -1;
+        l.len = 0;
+    }
+}
+
+// ---------- Iterator algorithms (Phase 1 stdlib) ----------
+// Higher-order algorithms operating on native `Vec<i64>` via first-class
+// function pointers. The predicate / transform / reducer arguments are
+// user-defined functions passed by value (function reference).
+//
+// Every implementation is written against `Vec<i64>` — matching the rest of
+// the Phase-1 stdlib (sort / binary_search / reverse operate on Vec<i64> too).
+// The concrete signatures (e.g. `fn(i64)->bool` for predicates) are matched
+// directly through Aero's `Ty::Fn(..)` type checker.
+
+// Keep only elements for which `pred(x)` returns true (order preserved).
+fn _filter_impl(v: &mut Vec<i64>, pred: FnPred) -> Vec<i64> {
+    let out = Vec::new();
+    let i = 0;
+    let n = v.len();
+    while (i < n) {
+        let x = v.get(i);
+        if (pred(x)) {
+            out.push(x);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Produce a new Vec whose i-th element is `transform(v[i])`.
+fn _map_impl(v: &mut Vec<i64>, transform: FnTrans) -> Vec<i64> {
+    let out = Vec::new();
+    let i = 0;
+    let n = v.len();
+    while (i < n) {
+        let x = v.get(i);
+        out.push(transform(x));
+        i = i + 1;
+    }
+    return out;
+}
+
+// Left-fold the Vec: `reduce(v, f, init) = f(f(f(init, v[0]), v[1]), ...)`.
+fn _reduce_impl(v: &mut Vec<i64>, reducer: FnRed, init: i64) -> i64 {
+    let acc = init;
+    let i = 0;
+    let n = v.len();
+    while (i < n) {
+        acc = reducer(acc, v.get(i));
+        i = i + 1;
+    }
+    return acc;
+}
+
+// ---------- Path operations (Phase 1 paths) ----------
+// Tiny, portable path helpers built on the native `String` (a NUL-terminated
+// byte buffer). The separator is `/` (47); `\` (92) is also accepted on input
+// so Windows-style paths work identically on every platform. All functions
+// return an owned `String`, so the caller may `free`/drop it as usual.
+fn path_join(a: str, b: str) -> String {
+    let out = String::new();
+    let asx = String::from(a);
+    let bsx = String::from(b);
+    let alen = asx.len();
+    let blen = bsx.len();
+    let i = 0;
+    while (i < alen) {
+        out.push(asx.at(i));
+        i = i + 1;
+    }
+    // strip trailing separators from `a`
+    while ((out.len() > 0) && (out.at(out.len() - 1) == 47)) {
+        out.pop();
+    }
+    // append a single separator (unless `a` was empty)
+    if (out.len() > 0) {
+        out.push(47);
+    }
+    // append `b`, skipping its leading separators
+    let j = 0;
+    while ((j < blen) && (bsx.at(j) == 47)) {
+        j = j + 1;
+    }
+    while (j < blen) {
+        out.push(bsx.at(j));
+        j = j + 1;
+    }
+    return out;
+}
+
+// File name portion of `path` (everything after the last separator). Returns
+// "" when `path` is empty or ends in a separator.
+fn path_basename(path: str) -> String {
+    let s = String::from(path);
+    let n = s.len();
+    let last = -1;
+    let i = 0;
+    while (i < n) {
+        let c = s.at(i);
+        if ((c == 47) || (c == 92)) {
+            last = i;
+        }
+        i = i + 1;
+    }
+    let out = String::new();
+    let start = last + 1;
+    let j = start;
+    while (j < n) {
+        out.push(s.at(j));
+        j = j + 1;
+    }
+    return out;
+}
+
+// Directory portion of `path` (everything before the last separator, with any
+// trailing separators stripped). Returns "" when `path` has no separator.
+fn path_dirname(path: str) -> String {
+    let s = String::from(path);
+    let n = s.len();
+    // find the last separator
+    let last = -1;
+    let i = 0;
+    while (i < n) {
+        let c = s.at(i);
+        if ((c == 47) || (c == 92)) {
+            last = i;
+        }
+        i = i + 1;
+    }
+    let out = String::new();
+    if (last < 0) {
+        return out;
+    }
+    // copy [0, last), skipping trailing separators
+    let end = last;
+    let e = end;
+    while ((e > 0) && ((s.at(e - 1) == 47) || (s.at(e - 1) == 92))) {
+        e = e - 1;
+    }
+    let j = 0;
+    while (j < e) {
+        out.push(s.at(j));
+        j = j + 1;
+    }
+    return out;
+}
+
+// Extension of the file name in `path` (the substring after the last `.` that
+// follows the last separator), including the dot. Returns "" when there is no
+// extension.
+fn path_extension(path: str) -> String {
+    let s = String::from(path);
+    let n = s.len();
+    // find the last separator (dot must come after it)
+    let last_sep = -1;
+    let i = 0;
+    while (i < n) {
+        let c = s.at(i);
+        if ((c == 47) || (c == 92)) {
+            last_sep = i;
+        }
+        i = i + 1;
+    }
+    // find the last dot after last_sep
+    let last_dot = -1;
+    let j = last_sep + 1;
+    while (j < n) {
+        if (s.at(j) == 46) {
+            last_dot = j;
+        }
+        j = j + 1;
+    }
+    let out = String::new();
+    if (last_dot < 0) {
+        return out;
+    }
+    let k = last_dot;
+    while (k < n) {
+        out.push(s.at(k));
+        k = k + 1;
+    }
+    return out;
+}
+
+// ---------- JSON (Phase 1 serialization) ----------
+// A small, dependency-free JSON encoder/decoder built on the native `String`.
+// Encoders turn a primitive into valid JSON text; `json_join` assembles arrays and
+// objects from pre-encoded members. Decoders read a JSON value at the start of a
+// string and return the decoded primitive (or -1 / "" / false on a mismatch).
+
+// Returns the escape letter for JSON special char `c`, or 0 when `c` is a normal
+// char. `"` (34) / `\` (92) become `\"` / `\\`; control chars become `\n` (110),
+// `\r` (114), `\t` (116), `\b` (98), `\f` (102).
+fn _json_esc_letter(c: i64) -> i64 {
+    if (c == 34) { return 34; }
+    if (c == 92) { return 92; }
+    if (c == 10) { return 110; }
+    if (c == 13) { return 114; }
+    if (c == 9) { return 116; }
+    if (c == 8) { return 98; }
+    if (c == 12) { return 102; }
+    return 0;
+}
+
+// Escape a raw string so it can be embedded inside a JSON string literal.
+fn json_escape(s: str) -> String {
+    let src = String::from(s);
+    let out = String::new();
+    let n = src.len();
+    let i = 0;
+    while (i < n) {
+        let c = src.at(i);
+        let e = _json_esc_letter(c);
+        if (e == 0) {
+            out.push(c);
+        } else {
+            out.push(92);   // backslash
+            out.push(e);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// Encode `s` as a JSON string literal (with surrounding quotes).
+fn json_string(s: str) -> String {
+    let out = String::new();
+    out.push(34);
+    let esc = json_escape(s);
+    let n = esc.len();
+    let i = 0;
+    while (i < n) {
+        out.push(esc.at(i));
+        i = i + 1;
+    }
+    out.push(34);
+    return out;
+}
+
+// Encode an integer as a JSON number.
+fn json_number_i64(v: i64) -> String {
+    return String::from(int_to_str(v));
+}
+
+// Encode a float as a JSON number (6 decimal places, always valid JSON).
+fn json_number_f64(v: f64) -> String {
+    return String::from(format("%f", v));
+}
+
+// Encode a boolean as a JSON literal.
+fn json_bool(b: bool) -> String {
+    if (b) {
+        let s = String::from("true");
+        return s;
+    }
+    let s = String::from("false");
+    return s;
+}
+
+// The JSON `null` literal.
+fn json_null() -> String {
+    let s = String::from("null");
+    return s;
+}
+
+// Join two pre-encoded JSON fragments with `sep` ("," for array/object members,
+// ":" for a key/value pair). Returns a new owned String.
+fn json_join(a: String, sep: str, b: String) -> String {
+    let out = String::new();
+    let i = 0;
+    let an = a.len();
+    while (i < an) {
+        out.push(a.at(i));
+        i = i + 1;
+    }
+    let sp = String::from(sep);
+    let j = 0;
+    let sn = sp.len();
+    while (j < sn) {
+        out.push(sp.at(j));
+        j = j + 1;
+    }
+    let k = 0;
+    let bn = b.len();
+    while (k < bn) {
+        out.push(b.at(k));
+        k = k + 1;
+    }
+    return out;
+}
+
+// Whether `s` starts with the byte prefix `p`.
+fn _json_prefix(s: str, p: str) -> bool {
+    let a = String::from(s);
+    let b = String::from(p);
+    let alen = a.len();
+    let blen = b.len();
+    if (blen > alen) { return false; }
+    let i = 0;
+    while (i < blen) {
+        if (a.at(i) != b.at(i)) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Parse a JSON integer at the start of `s` (optional `-` then digits). Returns 0
+// when the string does not begin with a valid number.
+fn json_parse_i64(s: str) -> i64 {
+    let src = String::from(s);
+    let n = src.len();
+    let i = 0;
+    let neg = 0;
+    if ((i < n) && (src.at(i) == 45)) {
+        neg = 1;
+        i = i + 1;
+    }
+    let val = 0;
+    while (i < n) {
+        let c = src.at(i);
+        if ((c < 48) || (c > 57)) {
+            break;
+        }
+        val = val * 10 + (c - 48);
+        i = i + 1;
+    }
+    if (neg == 1) {
+        return 0 - val;
+    }
+    return val;
+}
+
+// Parse a JSON boolean literal at the start of `s`. Returns true only when `s`
+// begins with `true`.
+fn json_parse_bool(s: str) -> bool {
+    if (_json_prefix(s, "true")) { return true; }
+    return false;
+}
+
+// Decode a JSON string literal `"..."` into the raw string it denotes (without the
+// surrounding quotes). Handles `\"`, `\\`, `\/`, `\n`, `\t`, `\r`, `\b`, `\f`.
+// `\uXXXX` escapes are copied through verbatim (best-effort, no UTF-16 decoding).
+fn json_unescape(s: str) -> String {
+    let src = String::from(s);
+    let n = src.len();
+    let out = String::new();
+    let i = 0;
+    if ((i < n) && (src.at(i) == 34)) { i = i + 1; }
+    while (i < n) {
+        let c = src.at(i);
+        if (c == 34) { break; }
+        if (c == 92) {
+            if ((i + 1) < n) {
+                let e = src.at(i + 1);
+                if (e == 110) { out.push(10); i = i + 2; continue; }
+                if (e == 116) { out.push(9); i = i + 2; continue; }
+                if (e == 114) { out.push(13); i = i + 2; continue; }
+                if (e == 98) { out.push(8); i = i + 2; continue; }
+                if (e == 102) { out.push(12); i = i + 2; continue; }
+                if (e == 47) { out.push(47); i = i + 2; continue; }
+                if (e == 34) { out.push(34); i = i + 2; continue; }
+                if (e == 92) { out.push(92); i = i + 2; continue; }
+                out.push(92);
+                out.push(117);
+                let h = i + 2;
+                let k = 0;
+                while ((k < 4) && ((h + k) < n)) {
+                    out.push(src.at(h + k));
+                    k = k + 1;
+                }
+                i = h + 4;
+                continue;
+            }
+            out.push(92);
+            i = i + 1;
+            continue;
+        }
+        out.push(c);
+        i = i + 1;
+    }
+    return out;
+}
+
+// Locate the value of key `key` inside a JSON object string `s`. Returns the index
+// right after `"key"` and the following `:` (skipping whitespace), or -1 when the
+// key is not found. The caller can then use `json_unescape` / `json_parse_i64` /
+// `json_parse_bool` on the substring starting at that index.
+fn json_find_key(s: str, key: str) -> i64 {
+    let src = String::from(s);
+    let k = String::from(key);
+    let n = src.len();
+    let kn = k.len();
+    let i = 0;
+    while (i < n) {
+        if (src.at(i) == 34) {
+            let good = 1;
+            let j = 0;
+            while ((j < kn) && ((i + 1 + j) < n)) {
+                if (src.at(i + 1 + j) != k.at(j)) { good = 0; }
+                j = j + 1;
+            }
+            if ((good == 1) && ((i + 1 + kn) < n)) {
+                if (src.at(i + 1 + kn) == 34) {
+                    let p = i + 1 + kn + 1;
+                    while (p < n) {
+                        if (src.at(p) == 58) { break; }
+                        p = p + 1;
+                    }
+                    let q = p + 1;
+                    while ((q < n) && ((src.at(q) == 32) || (src.at(q) == 9))) {
+                        q = q + 1;
+                    }
+                    return q;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// ---------- Reverse-mode automatic differentiation (AD) ----------
+// A compact explicit-tape reverse-mode (backpropagation) engine over f64.
+//
+// A `Grad` records an op tree of named nodes. Each node stores its op code,
+// parent node indices (or -1), its primal value, and an accumulated gradient.
+// `g_backward(root)` seeds d(root)/d(root)=1 and propagates gradients in reverse
+// creation order (topological order backwards). Reading `g_grad(t, node)` yields
+// d(root)/d(node), so the gradient w.r.t. every leaf is obtained in one pass.
+//
+// Op codes:
+//   0 = leaf (constant / independent variable)
+//   2 = add(a, b)         3 = mul(a, b)   4 = neg(a)
+//   5 = inv(a)  =  1/a    (division is mul(a, inv(b)))
+struct Grad {
+    op: Vec<i64>,   // op code of node i
+    pa: Vec<i64>,   // first  parent index (or -1)
+    pb: Vec<i64>,   // second parent index (or -1)
+    val: Vec<f64>,  // primal value of node i
+    grad: Vec<f64>, // accumulated derivative of node i
+}
+
+fn grad_new() -> Grad {
+    return Grad {
+        op: Vec::new(),
+        pa: Vec::new(),
+        pb: Vec::new(),
+        val: Vec::new(),
+        grad: Vec::new(),
+    };
+}
+
+// Allocate a node and return its index.
+fn _g_node(g: &mut Grad, op: i64, pa: i64, pb: i64, v: f64) -> i64 {
+    g.op.push(op);
+    g.pa.push(pa);
+    g.pb.push(pb);
+    g.val.push(v);
+    g.grad.push(0.0);
+    return g.val.len() - 1;
+}
+
+// Record a leaf: a constant or an independent variable (no parents).
+fn g_leaf(g: &mut Grad, v: f64) -> i64 {
+    return _g_node(g, 0, -1, -1, v);
+}
+
+fn g_add(g: &mut Grad, a: i64, b: i64) -> i64 {
+    let va = g.val.get(a);
+    let vb = g.val.get(b);
+    return _g_node(g, 2, a, b, va + vb);
+}
+
+fn g_mul(g: &mut Grad, a: i64, b: i64) -> i64 {
+    let va = g.val.get(a);
+    let vb = g.val.get(b);
+    return _g_node(g, 3, a, b, va * vb);
+}
+
+fn g_neg(g: &mut Grad, a: i64) -> i64 {
+    let va = g.val.get(a);
+    return _g_node(g, 4, a, -1, 0.0 - va);
+}
+
+fn g_inv(g: &mut Grad, a: i64) -> i64 {
+    let va = g.val.get(a);
+    return _g_node(g, 5, a, -1, 1.0 / va);
+}
+
+fn g_sub(g: &mut Grad, a: i64, b: i64) -> i64 {
+    return g_add(g, a, g_neg(g, b));
+}
+
+fn g_div(g: &mut Grad, a: i64, b: i64) -> i64 {
+    return g_mul(g, a, g_inv(g, b));
+}
+
+// Seed d(root)/d(root) = 1, then backpropagate in reverse creation order.
+fn g_backward(g: &mut Grad, root: i64) {
+    g.grad.set(root, 1.0);
+    let i = root;
+    while (i >= 0) {
+        let gv = g.grad.get(i);
+        let op = g.op.get(i);
+        let a = g.pa.get(i);
+        if (op == 2) { // add: dA += gv ; dB += gv
+            let b = g.pb.get(i);
+            g.grad.set(a, g.grad.get(a) + gv);
+            g.grad.set(b, g.grad.get(b) + gv);
+        } else {
+            if (op == 3) { // mul: dA += gv*B ; dB += gv*A
+                let b = g.pb.get(i);
+                let av = g.val.get(a);
+                let bv = g.val.get(b);
+                g.grad.set(a, g.grad.get(a) + gv * bv);
+                g.grad.set(b, g.grad.get(b) + gv * av);
+            } else {
+                if (op == 4) { // neg: dA += -gv
+                    g.grad.set(a, g.grad.get(a) - gv);
+                } else {
+                    if (op == 5) { // inv(1/x): dA += -gv / x^2
+                        let xv = g.val.get(a);
+                        g.grad.set(a, g.grad.get(a) - gv / (xv * xv));
+                    }
+                }
+            }
+        }
+        // op 0 (leaf) has no parents; nothing to propagate.
+        i = i - 1;
+    }
+}
+
+// Gradient of `node` after `g_backward(t, root)`.
+fn g_grad(g: &mut Grad, node: i64) -> f64 {
+    return g.grad.get(node);
+}
+
+// Primal (forward) value of `node`.
+fn g_val(g: &mut Grad, node: i64) -> f64 {
+    return g.val.get(node);
+}

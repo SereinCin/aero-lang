@@ -1,0 +1,159 @@
+name: release
+
+# Builds the Aero compiler natively on all three desktop platforms and
+# attaches the resulting binaries + install scripts to a GitHub release.
+#
+# Why native builds (and not cross-compilation): aero-ir links LLVM 22
+# statically through inkwell/llvm-sys, and LLVM simply does not cross-compile
+# between Windows/macOS/Linux. So each OS builds its own copy. Apple Silicon
+# is covered by macos-14 (arm64); the x86_64 mac build uses macos-13.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            artifact: aero-1.1.0-linux-x86_64
+            triple: x86_64-unknown-linux-gnu
+            linker: gcc
+            shell: sh
+          - name: macos-x86_64
+            os: macos-13
+            artifact: aero-1.1.0-macos-x86_64
+            triple: x86_64-apple-darwin
+            linker: clang
+            shell: sh
+          - name: macos-arm64
+            os: macos-14
+            artifact: aero-1.1.0-macos-arm64
+            triple: aarch64-apple-darwin
+            linker: clang
+            shell: sh
+          - name: windows-x86_64
+            os: windows-latest
+            artifact: aero-1.1.0-windows-x86_64
+            triple: x86_64-pc-windows-gnu
+            linker: gcc
+            shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # aero needs a C toolchain at link time: gcc on Linux/Windows (MinGW),
+      # clang on macOS (Xcode CLT already ships clang; `gcc` may not exist).
+      # GitHub's windows runner already has MinGW gcc on PATH, so no extra
+      # install step is needed there.
+      - name: Install C toolchain (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y gcc
+
+      # llvm-sys 221 does not vendor or build LLVM itself: it links whatever
+      # llvm-config is on PATH (or LLVM_SYS_221_PREFIX). aero-ir needs LLVM 22,
+      # so each platform installs it explicitly. The cache step below keeps the
+      # expensive static libs warm between runs.
+      - name: Install LLVM 22 (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-22 llvm-22-dev clang-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 22 (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          brew install llvm@22
+          echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 22 (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Official LLVM 22.1 Windows release ships llvm-config + static libs.
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe"
+          $exe = "$env:TEMP\LLVM-22.1.8-win64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          $p = Start-Process -FilePath $exe -ArgumentList "/S /D=C:\LLVM" -Wait -PassThru
+          echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          echo "LLVM_SYS_221_PREFIX=C:\LLVM" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify llvm-config
+        run: llvm-config --version
+
+      # Linking LLVM 22 is the slow part; cache the cargo build dir per OS so
+      # re-runs are quick (the installed LLVM itself is cached by the runner).
+      - name: Cache LLVM / cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ${{ matrix.os }}-llvm22-${{ hashFiles('crates/aero-ir/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-llvm22-
+
+      - name: Build release binary
+        env:
+          AERO_LINKER: ${{ matrix.linker }}
+        run: cargo build --release
+
+      - name: Stage Linux package
+        if: matrix.os == 'ubuntu-latest'
+        shell: sh
+        run: |
+          mkdir -p stage/bin
+          cp target/release/aero stage/bin/aero
+          cp scripts/install_linux.sh scripts/uninstall_linux.sh stage/
+          cp -r core stage/plugins
+          tar -C stage -czf ${{ matrix.artifact }}.tar.gz .
+          echo "package=${{ matrix.artifact }}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Stage macOS package
+        if: startsWith(matrix.os, 'macos-')
+        shell: sh
+        run: |
+          mkdir -p stage/bin
+          cp target/release/aero stage/bin/aero
+          cp scripts/install_macos.sh scripts/uninstall_macos.sh stage/
+          cp scripts/Aero\ Terminal.command stage/
+          cp -r core stage/plugins
+          tar -C stage -czf ${{ matrix.artifact }}.tar.gz .
+          echo "package=${{ matrix.artifact }}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Stage Windows package
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path stage\bin -Force | Out-Null
+          Copy-Item target\release\aero.exe stage\bin\aero.exe
+          Copy-Item installer\files\aero_cmd.bat, installer\files\aero_env.bat stage\bin\
+          Copy-Item -Recurse core stage\plugins
+          Compress-Archive -Path stage\* -DestinationPath ${{ matrix.artifact }}.zip
+          echo "package=${{ matrix.artifact }}.zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ env.package }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.package }}

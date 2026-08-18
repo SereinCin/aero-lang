@@ -2,11 +2,71 @@
 
 A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
 
+## Quick Start
+
+### Windows
+1. Download `Aero-1.1.2-win64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+2. Extract to any folder, double-click `install.bat`
+3. Open a new cmd window and run `aero --help`
+
+### Linux
+```bash
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.1.2/install.sh | sh
+```
+
+### Docker
+```bash
+docker run --rm -v $(pwd):/workspace aero-lang/aero:1.1.2 run hello.aero
+```
+
+### Build from Source
+```bash
+# Requirements: Rust 1.97+, LLVM 22
+cargo build --release
+./target/release/aero run examples/hello.aero
+```
+
 ## Pipeline
 
 ```
 Source -> Lex -> Parse -> HIR (type inference + borrow check) -> LLVM IR -> JIT / AOT executable
 ```
+
+## Example
+
+```
+print("Hello from Aero!\n");
+
+fn fib(n: i64) -> i64 {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+let i = 0;
+while (i < 10) {
+    print("fib("); print(i); print(") = "); print(fib(i)); print("\n");
+    i = i + 1;
+}
+```
+
+## Features
+
+| Feature | Status |
+|---------|--------|
+| AOT / JIT compilation | Stable |
+| LLVM IR codegen (inkwell) | Stable |
+| Type inference + generics | Stable |
+| Ownership + borrow checking | Stable |
+| Tensor operations + matmul | Stable |
+| C FFI (extern "C") | Stable |
+| Vec, HashMap, String, LinkedList | Stable |
+| ADTs (enum), traits, operator overloading | Stable |
+| Package manager (aero-pm) | Stable |
+| LSP server, formatter, linter | Stable |
+| Benchmark framework (aero bench) | Stable |
+| Linux x86_64 / aarch64 | New in 1.1.2 |
+| Docker image | New in 1.1.2 |
+| GitHub Action (setup-aero) | New in 1.1.2 |
 
 ## Crates
 
@@ -16,20 +76,24 @@ Source -> Lex -> Parse -> HIR (type inference + borrow check) -> LLVM IR -> JIT 
 | `aero-parse` | Parser (AST)                                    |
 | `aero-hir` | Name resolution, type inference, borrow checking  |
 | `aero-ir`  | LLVM IR codegen, JIT execution, AOT compilation   |
-| `aero-pm`  | Package manager (Aero.toml, dependency graph, tests) |
-| `aero-cli` | CLI: `aero run/build/new/test`                    |
+| `aero-pm`  | Package manager (Aero.toml, dependency graph, tests, benchmarks) |
+| `aero-cli` | CLI: `aero run/build/new/test/bench/clippy`        |
+| `aero-std` | Standard library (Option, Result, HashMap, etc.)   |
+| `aero-fmt` | Code formatter                                    |
+| `aero-clippy` | Static linter (100+ rules)                     |
 
 ## Toolchain Requirements
 
 - Rust 1.97+ (edition 2024)
 - LLVM 22 (llvm-sys 221); set `LLVM_SYS_221_PREFIX` to the LLVM prefix directory
-- MinGW UCRT64 `gcc` on `PATH` (used as the AOT linker)
+- MinGW UCRT64 `gcc` on PATH (Windows, used as the AOT linker)
 
-## Build & Run
+## Build & Test
 
-- `scripts\build.bat` — build the compiler
-- `scripts\run.bat` — run `examples\hello.aero` through the LLVM JIT
-- `cargo test` — run the full test suite
+```bash
+cargo build --release
+cargo test
+```
 
 ## CLI
 
@@ -37,35 +101,11 @@ Source -> Lex -> Parse -> HIR (type inference + borrow check) -> LLVM IR -> JIT 
 aero run <file.aero | package-dir>    compile and execute
 aero build [file.aero | dir]          compile to a standalone executable (AOT)
 aero new <name>                       create a new package skeleton
-aero test [file.aero]                 run tests (default: all in tests/)
+aero test [file.aero]                 run tests
+aero bench <file.aero>                run benchmarks
+aero fmt <file.aero>                  format code
+aero clippy <file.aero>               static analysis
 ```
-
-## FFI
-
-External C functions are declared with `extern "C"` (no body); the symbol name defaults to the function name and can be overridden with `= "c_symbol"`. Libraries are linked via the `[link]` section of `Aero.toml`:
-
-```toml
-[link]
-libs = ["kernel32"]   # passed to the linker as -lkernel32
-lib_paths = ["."]     # extra library search paths (-L)
-```
-
-## String System
-
-Built-in string support over C strings (`str` = `i8*`):
-
-- Concatenation: `"a" + "b"` (compile-time for literals, malloc at runtime)
-- Comparison: `==`/`!=` and `str_cmp` (all six operators)
-- `len(s)`, indexing `s[i]` (byte value), `substr(s, start, n)`
-- `int_to_str(n)`, `str_to_int(s)`, `str_contains(a, b)`, `str_find(a, b)`
-- `str_free(s)` releases malloc-allocated string results
-
-## File IO & CLI Arguments (0.1.1)
-
-- `read_file(path) -> str` — read a whole file (empty string on failure)
-- `write_file(path, contents) -> i64` — write, returns byte count (-1 on failure)
-- `arg_count() -> i64` / `arg(i) -> str` — command-line arguments
-  (AOT executables run with `myapp.exe a b c`; JIT runs with no arguments)
 
 ## License
 

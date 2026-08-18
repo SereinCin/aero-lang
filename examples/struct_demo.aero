@@ -1,0 +1,32 @@
+// Struct demo: named-field types end to end
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct Rect {
+    origin: Point,
+    w: i64,
+    h: i64,
+}
+
+fn area(r: Rect) -> i64 {
+    return r.w * r.h;
+}
+
+fn dist2(p: Point) -> i64 {
+    return p.x * p.x + p.y * p.y;
+}
+
+let p = Point { x: 3, y: 4 };
+print("p.x = %d\n", p.x);
+print("p.y = %d\n", p.y);
+print("dist2 = %d\n", dist2(p));
+
+let q = p;
+q.x = 100;
+print("q.x = %d, p.x = %d\n", q.x, p.x);
+
+let r = Rect { origin: Point { x: 1, y: 2 }, w: 10, h: 5 };
+print("area = %d\n", area(r));
+print("origin.y = %d\n", r.origin.y);

@@ -1,0 +1,6 @@
+[package]
+name = "ffi_sqlite"
+version = "0.1.0"
+
+[link]
+libs = ["sqlite3"]

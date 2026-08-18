@@ -1,0 +1,128 @@
+// Aero SQLite FFI binding module + demo.
+//
+// Demonstrates calling the SQLite C API through Aero's extern "C" FFI.
+// All C opaque handles (sqlite3*, sqlite3_stmt*, const char*) use `*i32`,
+// which maps to an opaque i8* under the hood.
+//
+// Covers: open/close, CREATE/INSERT/SELECT/DELETE, prepared statements,
+// and transactions (commit + rollback).
+
+mod sqlite {
+    // Core API
+    extern "C" fn sqlite3_libversion() -> *i32;
+    extern "C" fn sqlite3_open(filename: str, db: * *i32) -> i32;
+    extern "C" fn sqlite3_close(db: *i32) -> i32;
+    extern "C" fn sqlite3_errmsg(db: *i32) -> *i32;
+    extern "C" fn sqlite3_exec(db: *i32, sql: str, cb: *i32, arg: *i32, err: * *i32) -> i32;
+    extern "C" fn sqlite3_changes(db: *i32) -> i32;
+
+    // Prepared statements
+    extern "C" fn sqlite3_prepare_v2(db: *i32, sql: str, n: i32, stmt: * *i32, tail: * *i32) -> i32;
+    extern "C" fn sqlite3_step(stmt: *i32) -> i32;
+    extern "C" fn sqlite3_finalize(stmt: *i32) -> i32;
+    extern "C" fn sqlite3_column_count(stmt: *i32) -> i32;
+    extern "C" fn sqlite3_column_int(stmt: *i32, col: i32) -> i32;
+    extern "C" fn sqlite3_column_text(stmt: *i32, col: i32) -> *i32;
+    extern "C" fn sqlite3_column_name(stmt: *i32, col: i32) -> *i32;
+}
+
+// Execute SQL, print error if it fails.
+fn exec(db: *i32, sql: str) -> i32 {
+    let rc = sqlite::sqlite3_exec(db, sql, 0, 0, 0);
+    if (rc != 0) {
+        print("SQL error [%s]: %s\n", sql, sqlite::sqlite3_errmsg(db));
+    }
+    return rc;
+}
+
+// Query a scalar value (first row, first column as i32).
+// Uses a prepared statement internally.
+fn scalar(db: *i32, sql: str) -> i32 {
+    let stmt: *i32 = 0;
+    let prc = sqlite::sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (prc != 0) {
+        print("prepare failed: %s\n", sqlite::sqlite3_errmsg(db));
+        return -1;
+    }
+    let r = sqlite::sqlite3_step(stmt);
+    if (r != 100) {
+        sqlite::sqlite3_finalize(stmt);
+        return -1;
+    }
+    let v = sqlite::sqlite3_column_int(stmt, 0);
+    sqlite::sqlite3_finalize(stmt);
+    return v;
+}
+
+fn demo() {
+    print("=== Aero SQLite FFI Demo ===\n");
+
+    // 1. Open database
+    let db: *i32 = 0;
+    let rc = sqlite::sqlite3_open("ffi_demo.db", &db);
+    print("open db: rc=%lld\n", rc);
+    if (rc != 0) {
+        print("FATAL: %s\n", sqlite::sqlite3_errmsg(db));
+        return;
+    }
+    let ver = sqlite::sqlite3_libversion();
+    print("sqlite version: %s\n", ver);
+
+    // 2. Create table + insert data
+    exec(db, "DROP TABLE IF EXISTS users");
+    exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score INTEGER)");
+    exec(db, "INSERT INTO users (name, score) VALUES ('alice', 95)");
+    exec(db, "INSERT INTO users (name, score) VALUES ('bob', 82)");
+    exec(db, "INSERT INTO users (name, score) VALUES ('carol', 78)");
+    exec(db, "INSERT INTO users (name, score) VALUES ('dave', 91)");
+
+    // 3. Prepared query — step through results
+    print("--- query all users ---\n");
+    let stmt: *i32 = 0;
+    let prc = sqlite::sqlite3_prepare_v2(db, "SELECT id, name, score FROM users ORDER BY score DESC", -1, &stmt, 0);
+    if (prc != 0) {
+        print("prepare failed: %s\n", sqlite::sqlite3_errmsg(db));
+    } else {
+        let cols = sqlite::sqlite3_column_count(stmt);
+        print("columns: %lld\n", cols);
+        while (sqlite::sqlite3_step(stmt) == 100) {
+            let id = sqlite::sqlite3_column_int(stmt, 0);
+            let name = sqlite::sqlite3_column_text(stmt, 1);
+            let score = sqlite::sqlite3_column_int(stmt, 2);
+            print("  id=%lld name=%s score=%lld\n", id, name, score);
+        }
+        sqlite::sqlite3_finalize(stmt);
+    }
+
+    // 4. Rollback — insert then undo
+    print("--- transaction rollback ---\n");
+    exec(db, "BEGIN");
+    exec(db, "INSERT INTO users (name, score) VALUES ('eve', 88)");
+    let cnt_before = scalar(db, "SELECT count(*) FROM users");
+    print("count before rollback: %lld\n", cnt_before);
+    exec(db, "ROLLBACK");
+    let cnt_after = scalar(db, "SELECT count(*) FROM users");
+    print("count after rollback: %lld (should be 4)\n", cnt_after);
+
+    // 5. Commit — insert then persist
+    print("--- transaction commit ---\n");
+    exec(db, "BEGIN");
+    exec(db, "INSERT INTO users (name, score) VALUES ('frank', 73)");
+    exec(db, "COMMIT");
+    let cnt_committed = scalar(db, "SELECT count(*) FROM users");
+    print("count after commit: %lld (should be 5)\n", cnt_committed);
+
+    // 6. Delete
+    exec(db, "DELETE FROM users WHERE name = 'bob'");
+    let deleted = sqlite::sqlite3_changes(db);
+    print("deleted rows: %lld (should be 1)\n", deleted);
+    let cnt_final = scalar(db, "SELECT count(*) FROM users");
+    print("final count: %lld (should be 4)\n", cnt_final);
+
+    // 7. Cleanup
+    let close_rc = sqlite::sqlite3_close(db);
+    print("close db: rc=%lld\n", close_rc);
+    print("=== demo passed ===\n");
+}
+
+demo();

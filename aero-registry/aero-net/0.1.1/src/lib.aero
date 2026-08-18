@@ -1,0 +1,114 @@
+// aero-net: TCP networking via Winsock2 FFI
+// Requires ws2_32 (link: ws2_32)
+// Provides TCP socket creation, connection, send, recv.
+
+// ---------- Winsock2 API bindings ----------
+extern "C" fn WSAStartup(wVersionRequested: i32, lpWSAData: *i32) -> i32;
+extern "C" fn WSACleanup() -> i32;
+extern "C" fn socket(af: i32, typ: i32, protocol: i32) -> *i32;
+extern "C" fn connect(s: *i32, addr: *i32, addrlen: i32) -> i32;
+extern "C" fn send(s: *i32, buf: str, len: i32, flags: i32) -> i32;
+extern "C" fn recv(s: *i32, buf: str, len: i32, flags: i32) -> i32;
+extern "C" fn closesocket(s: *i32) -> i32;
+extern "C" fn htons(hostshort: i16) -> i16;
+extern "C" fn inet_addr(cp: str) -> i32;
+extern "C" fn WSAGetLastError() -> i32;
+
+// Address families
+const AF_INET: i32 = 2;
+
+// Socket types
+const SOCK_STREAM: i32 = 1;
+
+// Protocol
+const IPPROTO_TCP: i32 = 6;
+
+// Socket flags
+const INVALID_SOCKET: i32 = -1;
+const SOCKET_ERROR: i32 = -1;
+
+// TCP socket handle
+struct TcpSocket {
+    fd: *i32,
+    connected: bool,
+}
+
+// Initialize Winsock (call once at program start)
+// Returns 0 on success
+fn net_init() -> i32 {
+    // WSAStartup(MAKEWORD(2,2), &wsaData)
+    // MAKEWORD(2,2) = 0x0202
+    let mut wsa_data: [i32; 8] = [0; 8];
+    let rc = WSAStartup(0x0202, wsa_data);
+    return rc;
+}
+
+// Cleanup Winsock (call at program end)
+fn net_cleanup() {
+    WSACleanup();
+}
+
+// Create a TCP socket
+fn tcp_create() -> TcpSocket {
+    let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    return TcpSocket { fd: fd, connected: true };
+}
+
+// Connect to a TCP server (ip: dotted decimal string, port: host byte order)
+fn tcp_connect(sock: TcpSocket, ip: str, port: i16) -> i32 {
+    // Build sockaddr_in structure
+    // struct sockaddr_in { short sin_family; u_short sin_port; struct in_addr sin_addr; char sin_zero[8]; }
+    let mut addr: [i32; 4] = [0; 4]; // 16 bytes = 4 * i32
+    // sin_family = AF_INET
+    addr[0] = AF_INET;
+    // sin_port = htons(port)
+    // We need to store the port in the right byte position
+    // Since we can't easily do bit manipulation, store directly
+    // For simplicity, we pack sin_family | (port << 16)
+    let port_be = ((port >> 8) & 255) | ((port & 255) << 8);
+    addr[0] = AF_INET | (port_be << 16);
+    // sin_addr.s_addr = inet_addr(ip)
+    let ip_int = inet_addr(ip);
+    addr[1] = ip_int;
+    // sin_zero = 0 (already zero-initialized)
+
+    let rc = connect(sock.fd, addr, 16);
+    if (rc == SOCKET_ERROR) {
+        return WSAGetLastError();
+    }
+    return 0;
+}
+
+// Send data over a TCP socket
+// Returns number of bytes sent, or -1 on error
+fn tcp_send(sock: TcpSocket, data: str) -> i32 {
+    return send(sock.fd, data, data.len(), 0);
+}
+
+// Receive data from a TCP socket
+// Returns received data as a string (up to bufsize bytes)
+fn tcp_recv(sock: TcpSocket, bufsize: i32) -> str {
+    let mut buf = "";
+    let mut i: i32 = 0;
+    while (i < bufsize) {
+        buf = buf + 0;
+        i = i + 1;
+    }
+    let n = recv(sock.fd, buf, bufsize, 0);
+    if (n <= 0) {
+        return "";
+    }
+    // Truncate buffer to actual received bytes
+    let mut result = "";
+    let mut j: i32 = 0;
+    while (j < n) {
+        result = result + buf.at(j);
+        j = j + 1;
+    }
+    return result;
+}
+
+// Close a TCP socket
+fn tcp_close(sock: TcpSocket) {
+    closesocket(sock.fd);
+}

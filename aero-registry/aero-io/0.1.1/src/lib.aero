@@ -1,0 +1,76 @@
+// aero-io: I/O utilities
+// File reading, writing, and path manipulation
+
+// Read a file and return its contents as a string
+// Uses FFI to call C stdio functions
+extern "C" fn fopen(path: str, mode: str) -> *i32;
+extern "C" fn fclose(fp: *i32) -> i32;
+extern "C" fn fgetc(fp: *i32) -> i32;
+extern "C" fn feof(fp: *i32) -> i32;
+
+// Read an entire file into a string
+fn read_file(path: str) -> str {
+    let fp = fopen(path, "r");
+    if (fp == 0) {
+        return "";
+    }
+    let mut content = "";
+    let mut ch = fgetc(fp);
+    while (ch != -1) {
+        content = content + ch;
+        ch = fgetc(fp);
+    }
+    fclose(fp);
+    return content;
+}
+
+// Check if a file exists (by trying to open it)
+fn file_exists(path: str) -> bool {
+    let fp = fopen(path, "r");
+    if (fp == 0) {
+        return false;
+    }
+    fclose(fp);
+    return true;
+}
+
+// Get the file extension from a path
+fn file_extension(path: str) -> str {
+    let mut dot_pos: i64 = -1;
+    let mut i: i64 = 0;
+    while (i < path.len()) {
+        if (path.at(i) == 46) { // '.'
+            dot_pos = i;
+        }
+        i = i + 1;
+    }
+    if (dot_pos < 0) {
+        return "";
+    }
+    let mut ext = "";
+    let mut j = dot_pos + 1;
+    while (j < path.len()) {
+        ext = ext + path.at(j);
+        j = j + 1;
+    }
+    return ext;
+}
+
+// Get the basename of a path (everything after the last / or \)
+fn basename(path: str) -> str {
+    let mut sep_pos: i64 = -1;
+    let mut i: i64 = 0;
+    while (i < path.len()) {
+        if (path.at(i) == 47 || path.at(i) == 92) { // '/' or '\'
+            sep_pos = i;
+        }
+        i = i + 1;
+    }
+    let mut result = "";
+    let mut j = sep_pos + 1;
+    while (j < path.len()) {
+        result = result + path.at(j);
+        j = j + 1;
+    }
+    return result;
+}

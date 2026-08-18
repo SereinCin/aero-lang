@@ -1,0 +1,43 @@
+// Trait demo: static dispatch end to end
+//
+// 1. trait 定义（方法必须显式声明 receiver 参数）
+trait Drawable {
+    fn draw(s: Square);
+}
+
+// 2. struct 定义
+struct Rect {
+    w: i64,
+    h: i64,
+}
+
+struct Square {
+    side: i64,
+}
+
+// 3. trait 实现：impl Trait for Type
+impl Drawable for Square {
+    fn draw(s: Square) {
+        print("square %lld\n", s.side);
+    }
+}
+
+// 4. 内蕴方法：impl Type
+impl Rect {
+    fn area(r: Rect) -> i64 {
+        return r.w * r.h;
+    }
+}
+
+// 5. trait bound 泛型函数：fn name<T: Trait>(...)
+fn draw_area<T: Drawable>(d: T) {
+    d.draw();
+}
+
+// 6. 方法调用（通过 trait 解析）
+let r = Rect { w: 3, h: 4 };
+print("area = %lld\n", r.area());
+
+let s = Square { side: 5 };
+s.draw();
+draw_area(s);

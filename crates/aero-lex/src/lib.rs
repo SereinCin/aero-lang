@@ -76,23 +76,65 @@ fn strip_bom(source: &str) -> String {
     out
 }
 
-/// Replace `//` line comments with equal-length spaces, preserving offsets.
+/// Replace `//` line comments and `/* */` block comments with equal-length
+/// spaces (keeping newlines inside block comments so line numbers stay stable),
+/// preserving byte offsets for every real token.
 fn strip_comments(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+        // String (`"…"`) and char (`'…'`) literals are copied verbatim so that a
+        // `//` or `/*` inside them (e.g. a URL like `"http://host/path"`) is not
+        // mistaken for a comment marker. Escapes (`\X`) copy the escaped char too.
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            out.push(quote);
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i];
+                out.push(c);
+                i += 1;
+                if c == b'\\' && i < bytes.len() {
+                    out.push(bytes[i]);
+                    i += 1;
+                } else if c == quote {
+                    break;
+                }
+            }
+        } else if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            // Line comment: consume to (but not including) the newline.
             while i < bytes.len() && bytes[i] != b'\n' {
                 out.push(b' ');
                 i += 1;
+            }
+        } else if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            // Block comment: replace start marker, blank the interior (keeping
+            // newlines), then consume through the `*/` end marker.
+            out.push(b' ');
+            out.push(b' ');
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                if bytes[i] == b'\n' {
+                    out.push(b'\n');
+                } else {
+                    out.push(b' ');
+                }
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                out.push(b' ');
+                out.push(b' ');
+                i += 2; // consume `*/`
+            } else {
+                // Unterminated: treat the remainder as comment (nothing left).
             }
         } else {
             out.push(bytes[i]);
             i += 1;
         }
     }
-    // Only ASCII spaces are written, so UTF-8 encoding is unchanged.
+    // Only ASCII spaces/newlines are written, so UTF-8 encoding is unchanged.
     String::from_utf8(out).expect("source remains valid UTF-8 after comment stripping")
 }
 
@@ -148,6 +190,34 @@ mod tests {
     }
 
     #[test]
+    fn keeps_slashes_inside_string_and_char_literals() {
+        // `//` and `/*` inside a string literal (e.g. a URL) must survive comment
+        // stripping; only real comments are removed.
+        let tokens = lex(r#"let u = "http://host/x/*y"; let c = '/'; print("ok\n");"#).unwrap();
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Let,
+                TokenKind::Ident("u".into()),
+                TokenKind::Eq,
+                TokenKind::Str("http://host/x/*y".into()),
+                TokenKind::Semi,
+                TokenKind::Let,
+                TokenKind::Ident("c".into()),
+                TokenKind::Eq,
+                TokenKind::Char('/'),
+                TokenKind::Semi,
+                TokenKind::Print,
+                TokenKind::LParen,
+                TokenKind::Str("ok\n".into()),
+                TokenKind::RParen,
+                TokenKind::Semi,
+            ]
+        );
+    }
+
+    #[test]
     fn reports_line_and_col() {
         let tokens = lex("let x = 1;\nprint(x);").unwrap();
         let print_tok = &tokens[5];
@@ -161,5 +231,16 @@ mod tests {
         assert!(err.msg.contains('@'));
         assert_eq!(err.line, 1);
         assert_eq!(err.col, 5);
+    }
+
+    #[test]
+    fn skips_block_comments() {
+        let tokens = lex("let a /* x */ = /* multi\nline */ 1;").unwrap();
+        // 5 tokens: let a = 1 ; — both block comments are ignored.
+        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Let, TokenKind::Ident("a".into()), TokenKind::Eq, TokenKind::Int(1), TokenKind::Semi]
+        );
     }
 }

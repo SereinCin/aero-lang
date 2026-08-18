@@ -1,0 +1,46 @@
+// aero-time: Time formatting utilities
+// Format timestamps and durations
+
+// Format a timestamp as a string
+fn format_timestamp(secs: i64) -> str {
+    // Simple format: "seconds.nnn"
+    let sec_str = secs;
+    return sec_str + ".000";
+}
+
+// Format a duration in seconds as a human-readable string
+fn format_duration(secs: i64) -> str {
+    if (secs < 60) {
+        return secs + "s";
+    }
+    let minutes = secs / 60;
+    let remain_secs = secs % 60;
+    if (minutes < 60) {
+        return minutes + "m " + remain_secs + "s";
+    }
+    let hours = minutes / 60;
+    let remain_min = minutes % 60;
+    return hours + "h " + remain_min + "m " + remain_secs + "s";
+}
+
+// Format bytes as a human-readable string (KB, MB, GB)
+fn format_bytes(bytes: i64) -> str {
+    if (bytes < 1024) {
+        return bytes + " B";
+    }
+    let kb = bytes / 1024;
+    if (kb < 1024) {
+        return kb + " KB";
+    }
+    let mb = kb / 1024;
+    if (mb < 1024) {
+        return mb + " MB";
+    }
+    let gb = mb / 1024;
+    return gb + " GB";
+}
+
+// Get a simple timestamp string
+fn timestamp() -> str {
+    return "now";
+}

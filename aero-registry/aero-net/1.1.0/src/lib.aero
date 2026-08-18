@@ -1,0 +1,96 @@
+// aero-net
+// Minimal TCP sockets via Winsock2. Windows only.
+//
+// sockaddr_in packing is done manually — no struct layout control
+// in Aero yet. The port is stored in network byte order (big-endian)
+// by shifting bytes. Took a few tries to get the byte order right
+// because Winsock doesn't tell you, it just fails with WSAEINVAL.
+
+extern "C" fn WSAStartup(wVersionRequested: i32, lpWSAData: *i32) -> i32;
+extern "C" fn WSACleanup() -> i32;
+extern "C" fn socket(af: i32, typ: i32, protocol: i32) -> *i32;
+extern "C" fn connect(s: *i32, addr: *i32, addrlen: i32) -> i32;
+extern "C" fn send(s: *i32, buf: str, len: i64, flags: i32) -> i32;
+extern "C" fn recv(s: *i32, buf: str, len: i64, flags: i32) -> i32;
+extern "C" fn closesocket(s: *i32) -> i32;
+extern "C" fn inet_addr(cp: str) -> i32;
+extern "C" fn WSAGetLastError() -> i32;
+
+const AF_INET: i32 = 2;
+const SOCK_STREAM: i32 = 1;
+const IPPROTO_TCP: i32 = 6;
+const SOCKET_ERROR: i32 = -1;
+
+struct TcpSocket {
+    fd: *i32,
+    connected: bool,
+}
+
+// Must call once before any socket operations.
+// wVersionRequested = 0x0202 means Winsock 2.2.
+fn net_init() -> i32 {
+    let wsa_data: [i32; 8] = [0; 8];
+    // 0x0202 = 514 = Winsock 2.2
+    let rc = WSAStartup(514, wsa_data);
+    return rc;
+}
+
+fn net_cleanup() {
+    WSACleanup();
+}
+
+fn tcp_create() -> TcpSocket {
+    let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    return TcpSocket { fd: fd, connected: true };
+}
+
+// Connect to ip:port. ip is a dotted-decimal string ("1.2.3.4").
+// port is in host byte order — we convert to big-endian manually.
+//
+// sockaddr_in layout: [sin_family(2) | sin_port(2) | sin_addr(4) | sin_zero(8)]
+// Packed into 4 × i32 = 16 bytes.
+fn tcp_connect(sock: &TcpSocket, ip: str, port: i32) -> i32 {
+    let addr: [i32; 4] = [0; 4];
+    // port to network byte order: swap the two bytes
+    let port_be = ((port >> 8) & 255) | ((port & 255) << 8);
+    addr[0] = AF_INET | (port_be << 16);
+    let ip_int = inet_addr(ip);
+    addr[1] = ip_int;
+    let rc = connect(sock.fd, addr, 16);
+    if (rc == SOCKET_ERROR) {
+        return WSAGetLastError();
+    }
+    return 0;
+}
+
+fn tcp_send(sock: &TcpSocket, data: str) -> i32 {
+    return send(sock.fd, data, len(data), 0);
+}
+
+// Receive up to bufsize bytes. Returns the actual data received.
+// Empty string means connection closed or error.
+fn tcp_recv(sock: &TcpSocket, bufsize: i64) -> str {
+    let buf = "";
+    let i = 0;
+    while (i < bufsize) {
+        buf = buf + format("%c", 0);
+        i = i + 1;
+    }
+    let b = String::from(buf);
+    let n = recv(sock.fd, buf, bufsize, 0);
+    if (n <= 0) {
+        return "";
+    }
+    // trim the buffer to the actual received length
+    let result = "";
+    let j: i32 = 0;
+    while (j < n) {
+        result = result + format("%c", b.at(j));
+        j = j + 1;
+    }
+    return result;
+}
+
+fn tcp_close(sock: &TcpSocket) {
+    closesocket(sock.fd);
+}

@@ -1,0 +1,39 @@
+// Native Vec<T> smoke test
+let v: Vec<i64> = Vec::new();
+print("is_empty=%d len=%d\n", v.is_empty(), v.len());
+v.push(10);
+v.push(20);
+v.push(30);
+print("after push: len=%d is_empty=%d\n", v.len(), v.is_empty());
+print("get0=%d get1=%d get2=%d\n", v.get(0), v.get(1), v.get(2));
+print("idx1=%d\n", v[1]);
+v.set(1, 99);
+print("after set: idx1=%d\n", v[1]);
+v[0] = 7;
+print("after idx-write: get0=%d\n", v.get(0));
+let last = v.pop();
+print("popped=%d len=%d\n", last, v.len());
+
+// grow path: many pushes force a realloc (cap doubling)
+let w: Vec<i64> = Vec::new();
+for (i in [1, 2, 3, 4, 5, 6, 7, 8]) {
+    w.push(i * 2);
+}
+print("w len=%d\n", w.len());
+print("w0=%d w3=%d w7=%d\n", w.get(0), w.get(3), w.get(7));
+
+// with_cap pre-allocates
+let c: Vec<i64> = Vec::with_cap(4);
+c.push(100);
+c.push(200);
+print("cap c: len=%d get0=%d get1=%d\n", c.len(), c.get(0), c.get(1));
+
+// Vec of floats
+let f: Vec<f64> = Vec::new();
+f.push(1.5);
+f.push(2.5);
+print("f len=%d sum=%f\n", f.len(), f.get(0) + f.get(1));
+
+// explicit free (then it becomes an empty vector)
+c.free();
+print("after free: len=%d is_empty=%d\n", c.len(), c.is_empty());

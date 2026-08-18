@@ -1,0 +1,25 @@
+// 共性前置验证：Self 关键字 + trait 泛型参数/实参
+trait Pair<RHS> {
+    fn make(a: Self, b: RHS) -> i64;
+}
+
+struct A { v: i64 }
+
+impl Pair<i64> for A {
+    fn make(a: A, b: i64) -> i64 {
+        return a.v + b;
+    }
+}
+
+struct B { v: i64 }
+
+impl Pair<i64> for B {
+    fn make(b: B, c: i64) -> i64 {
+        return b.v * c;
+    }
+}
+
+print(A { v: 10 }.make(5));
+print("\n");
+print(B { v: 6 }.make(7));
+print("\n");

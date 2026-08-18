@@ -1,0 +1,131 @@
+// aero-json
+// Hand-rolled JSON parser. No regex, no dependencies.
+// Does the job for flat key-value lookups. Nested objects/arrays
+// will need a proper recursive descent when we get to it.
+
+struct JsonValue {
+    is_null: bool,
+    bool_val: bool,
+    int_val: i64,
+    str_val: str,
+    raw: str, // keep the original slice around for arrays/objects later
+}
+
+// Stub. Real recursive parsing lands once the AST supports it.
+fn parse_json(s: str) -> JsonValue {
+    return JsonValue {
+        is_null: true,
+        bool_val: false,
+        int_val: 0,
+        str_val: "",
+        raw: s,
+    };
+}
+
+// Scan for `"key": <number>` in a JSON string. Returns 0 if not found.
+fn json_get_int(s: str, key: str) -> i64 {
+    let src = String::from(s);
+    let q = String::from(key);
+    let sl = src.len();
+    let ql = q.len();
+    let i = 0;
+    while (i < sl) {
+        if (src.at(i) == 34) {
+            let j = i + 1;
+            let match_key = true;
+            while ((j - i - 1 < ql) && (j < sl)) {
+                if (src.at(j) != q.at(j - i - 1)) {
+                    match_key = false;
+                    break;
+                }
+                j = j + 1;
+            }
+            if (match_key && (j < sl) && (src.at(j) == 34)) {
+                let k = j + 1;
+                // skip anything before the colon
+                while ((k < sl) && (src.at(k) != 58)) {
+                    k = k + 1;
+                }
+                k = k + 1;
+                // ... and anything between colon and the value
+                while ((k < sl) && (src.at(k) == 32)) {
+                    k = k + 1;
+                }
+                // parse the number. negative sign first, then accumulate digits.
+                let neg = false;
+                if ((k < sl) && (src.at(k) == 45)) {
+                    neg = true;
+                    k = k + 1;
+                }
+                let n: i64 = 0;
+                while ((k < sl) && (src.at(k) >= 48) && (src.at(k) <= 57)) {
+                    n = n * 10 + (src.at(k) - 48);
+                    k = k + 1;
+                }
+                if (neg) {
+                    return 0 - n;
+                }
+                return n;
+            }
+            i = j;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Same idea, but for string values. Looks for `"key": "value"`.
+fn json_get_str(s: str, key: str) -> str {
+    let src = String::from(s);
+    let q = String::from(key);
+    let sl = src.len();
+    let ql = q.len();
+    let i = 0;
+    while (i < sl) {
+        if (src.at(i) == 34) {
+            let j = i + 1;
+            let match_key = true;
+            while ((j - i - 1 < ql) && (j < sl)) {
+                if (src.at(j) != q.at(j - i - 1)) {
+                    match_key = false;
+                    break;
+                }
+                j = j + 1;
+            }
+            if (match_key && (j < sl) && (src.at(j) == 34)) {
+                let k = j + 1;
+                while ((k < sl) && (src.at(k) != 58)) {
+                    k = k + 1;
+                }
+                k = k + 1;
+                while ((k < sl) && (src.at(k) == 32)) {
+                    k = k + 1;
+                }
+                if ((k < sl) && (src.at(k) == 34)) {
+                    k = k + 1;
+                    let str_start = k;
+                    let str_end = k;
+                    while ((k < sl) && (src.at(k) != 34)) {
+                        k = k + 1;
+                    }
+                    str_end = k;
+                    let result = "";
+                    let p = str_start;
+                    while (p < str_end) {
+                        result = result + format("%c", src.at(p));
+                        p = p + 1;
+                    }
+                    return result;
+                }
+            }
+            i = j;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// int64 -> JSON number string.
+fn json_number(n: i64) -> str {
+    return int_to_str(n);
+}

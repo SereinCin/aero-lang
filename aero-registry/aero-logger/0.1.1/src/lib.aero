@@ -1,0 +1,46 @@
+// aero-logger: Simple logging framework
+// Log levels: ERROR, WARN, INFO, DEBUG
+
+// Log level constants
+struct LogLevel {
+    value: i64,
+    label: str,
+}
+
+fn log_error(msg: str) {
+    print("[ERROR] %s\n", msg);
+}
+
+fn log_warn(msg: str) {
+    print("[WARN]  %s\n", msg);
+}
+
+fn log_info(msg: str) {
+    print("[INFO]  %s\n", msg);
+}
+
+fn log_debug(msg: str) {
+    print("[DEBUG] %s\n", msg);
+}
+
+// Log with a level prefix
+fn log(level: str, msg: str) {
+    print("[%s] %s\n", level, msg);
+}
+
+// Print a separator line
+fn log_separator() {
+    print("---\n");
+}
+
+// Format and log a key-value pair
+fn log_kv(key: str, value: str) {
+    print("  %s: %s\n", key, value);
+}
+
+// Log a section header
+fn log_section(title: str) {
+    log_separator();
+    print("  %s\n", title);
+    log_separator();
+}

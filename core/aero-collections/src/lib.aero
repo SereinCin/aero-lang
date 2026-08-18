@@ -1,0 +1,89 @@
+// aero-collections
+// Stack and queue backed by the native `Vec`. The stack grows as needed;
+// the queue keeps a fixed capacity of 64 and wraps around like a ring
+// buffer, so push and pop are both O(1).
+
+// ---- Stack ----
+struct Stack {
+    data: Vec<i64>,
+    top: i64,
+}
+
+fn stack_new() -> Stack {
+    return Stack { data: Vec::new(), top: 0 };
+}
+
+// No overflow check — the Vec grows as needed.
+fn stack_push(s: &mut Stack, val: i64) {
+    s.data.push(val);
+    s.top = s.top + 1;
+}
+
+// Underflow returns 0. Problem: 0 is a valid value too.
+// Can't distinguish without an Option type.
+fn stack_pop(s: &mut Stack) -> i64 {
+    if (s.top == 0) {
+        return 0;
+    }
+    s.top = s.top - 1;
+    return s.data.get(s.top);
+}
+
+fn stack_peek(s: &mut Stack) -> i64 {
+    if (s.top == 0) {
+        return 0;
+    }
+    return s.data.get(s.top - 1);
+}
+
+fn stack_is_empty(s: &mut Stack) -> bool {
+    return s.top == 0;
+}
+
+fn stack_len(s: &mut Stack) -> i64 {
+    return s.top;
+}
+
+// ---- Queue (ring buffer) ----
+// Fixed capacity 64. Head/tail wrap around the Vec, so push and pop are
+// both O(1). The capacity slot array is pre-filled in queue_new().
+struct Queue {
+    data: Vec<i64>,
+    head: i64,
+    tail: i64,
+    count: i64,
+}
+
+fn queue_new() -> Queue {
+    let d = Vec::new();
+    let i = 0;
+    while (i < 64) {
+        d.push(0);
+        i = i + 1;
+    }
+    return Queue { data: d, head: 0, tail: 0, count: 0 };
+}
+
+fn queue_enqueue(q: &mut Queue, val: i64) {
+    q.data.set(q.tail, val);
+    q.tail = (q.tail + 1) % 64;
+    q.count = q.count + 1;
+}
+
+fn queue_dequeue(q: &mut Queue) -> i64 {
+    if (q.count == 0) {
+        return 0;
+    }
+    let val = q.data.get(q.head);
+    q.head = (q.head + 1) % 64;
+    q.count = q.count - 1;
+    return val;
+}
+
+fn queue_is_empty(q: &mut Queue) -> bool {
+    return q.count == 0;
+}
+
+fn queue_len(q: &mut Queue) -> i64 {
+    return q.count;
+}

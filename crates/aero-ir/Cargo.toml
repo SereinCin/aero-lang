@@ -8,4 +8,5 @@ license.workspace = true
 aero-lex = { path = "../aero-lex" }
 aero-parse = { path = "../aero-parse" }
 aero-hir = { path = "../aero-hir" }
-inkwell = { version = "0.9", default-features = false, features = ["llvm22-1", "target-x86"] }
+aero-std = { path = "../aero-std" }
+inkwell = { version = "0.9", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64"] }

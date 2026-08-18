@@ -1,0 +1,78 @@
+// aero-http
+// libcurl wrapper. GET and POST, that's it for now.
+//
+// curl_easy_setopt is variadic in C, which doesn't map cleanly
+// to Aero's extern "C". We declare it with a *i32 param and pass
+// strings/ints through that. It works because under the hood
+// everything is an i8* anyway.
+//
+// The response body currently goes to stdout (libcurl's default
+// write callback). A version that captures the body into a buffer
+// is a follow-up.
+
+extern "C" fn curl_easy_init() -> *i32;
+extern "C" fn curl_easy_setopt(handle: *i32, option: i32, param: *i32) -> i32;
+extern "C" fn curl_easy_perform(handle: *i32) -> i32;
+extern "C" fn curl_easy_cleanup(handle: *i32);
+extern "C" fn curl_easy_strerror(code: i32) -> *i32;
+
+// CURLOPT values. These are from curl/curl.h — if they ever change
+// upstream, this breaks. Pinned to the values curl 8.x uses.
+const CURLOPT_URL: i32 = 10002;
+const CURLOPT_FOLLOWLOCATION: i32 = 52;
+const CURLOPT_TIMEOUT: i32 = 13;
+const CURLOPT_POST: i32 = 47;
+const CURLOPT_POSTFIELDS: i32 = 10015;
+
+struct HttpResponse {
+    data: str,
+    ok: bool,
+}
+
+// Issue a GET request. Returns a HttpResponse with ok=true on success.
+// Follows redirects, 30s timeout. Body goes to stdout for now.
+fn http_get(url: str) -> HttpResponse {
+    let handle = curl_easy_init();
+    if (handle == 0) {
+        return HttpResponse { data: "", ok: false };
+    }
+    curl_easy_setopt(handle, CURLOPT_URL, url);
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1);
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30);
+    let rc = curl_easy_perform(handle);
+    curl_easy_cleanup(handle);
+    if (rc == 0) {
+        return HttpResponse { data: "", ok: true };
+    }
+    let err = curl_easy_strerror(rc);
+    print("http_get error: %s\n", err);
+    return HttpResponse { data: "", ok: false };
+}
+
+// POST with a string body. Sets CURLOPT_POST and CURLOPT_POSTFIELDS.
+fn http_post(url: str, body: str) -> HttpResponse {
+    let handle = curl_easy_init();
+    if (handle == 0) {
+        return HttpResponse { data: "", ok: false };
+    }
+    curl_easy_setopt(handle, CURLOPT_URL, url);
+    curl_easy_setopt(handle, CURLOPT_POST, 1);
+    curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30);
+    let rc = curl_easy_perform(handle);
+    curl_easy_cleanup(handle);
+    if (rc == 0) {
+        return HttpResponse { data: "", ok: true };
+    }
+    let err = curl_easy_strerror(rc);
+    print("http_post error: %s\n", err);
+    return HttpResponse { data: "", ok: false };
+}
+
+fn http_ok(resp: HttpResponse) -> bool {
+    return resp.ok;
+}
+
+fn http_body(resp: HttpResponse) -> str {
+    return resp.data;
+}

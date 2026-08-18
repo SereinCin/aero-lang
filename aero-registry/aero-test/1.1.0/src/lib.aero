@@ -1,0 +1,54 @@
+// aero-test
+// Tiny assertion helpers. Enough for unit tests.
+// FAIL messages include actual vs expected so you don't have to
+// jump back to the source to figure out what went wrong.
+
+// Boolean assertion — not great for complex expressions, but works.
+fn assert_true(cond: bool, msg: str) {
+    if (cond == false) {
+        print("FAIL: %s\n", msg);
+    } else {
+        print("PASS: %s\n", msg);
+    }
+}
+
+// Ideally these assert_eq would be generic, but Aero doesn't support
+// cross-type generics yet. One function per type for now.
+fn assert_eq_i64(got: i64, expected: i64, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got %d, expected %d)\n", msg, got, expected);
+    }
+}
+
+fn assert_eq_i32(got: i32, expected: i32, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got %d, expected %d)\n", msg, got, expected);
+    }
+}
+
+fn assert_eq_str(got: str, expected: str, msg: str) {
+    if (got == expected) {
+        print("PASS: %s\n", msg);
+    } else {
+        print("FAIL: %s (got '%s', expected '%s')\n", msg, got, expected);
+    }
+}
+
+fn test_group(name: str) {
+    print("\n=== %s ===\n", name);
+}
+
+// Call this at the end. ALL PASS if failed == 0, otherwise
+// it prints the failure count so you know how bad things are.
+fn test_summary(passed: i64, failed: i64) {
+    print("\n--- summary: %d passed, %d failed ---\n", passed, failed);
+    if (failed == 0) {
+        print("ALL TESTS PASSED\n");
+    } else {
+        print("SOME TESTS FAILED\n");
+    }
+}

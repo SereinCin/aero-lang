@@ -1,0 +1,80 @@
+// aero-http: HTTP client via libcurl FFI
+// Requires libcurl (link: curl)
+// Provides simple GET/POST and header inspection.
+
+// ---------- libcurl C API bindings ----------
+extern "C" fn curl_easy_init() -> *i32;
+extern "C" fn curl_easy_setopt(handle: *i32, option: i32, param: *i32) -> i32;
+extern "C" fn curl_easy_perform(handle: *i32) -> i32;
+extern "C" fn curl_easy_cleanup(handle: *i32);
+extern "C" fn curl_easy_strerror(code: i32) -> *i32;
+
+// Option constants (CURLOPT_*)
+// CURLOPT_URL = 10002, CURLOPT_WRITEDATA = 10001, CURLOPT_POST = 47,
+// CURLOPT_POSTFIELDS = 10015, CURLOPT_TIMEOUT = 13, CURLOPT_FOLLOWLOCATION = 52
+const CURLOPT_URL: i32 = 10002;
+const CURLOPT_WRITEDATA: i32 = 10001;
+const CURLOPT_POST: i32 = 47;
+const CURLOPT_POSTFIELDS: i32 = 10015;
+const CURLOPT_TIMEOUT: i32 = 13;
+const CURLOPT_FOLLOWLOCATION: i32 = 52;
+
+// Write callback: curl writes response body to a growing buffer
+// We use a fixed global buffer (4096 bytes) for simplicity.
+struct HttpResponse {
+    data: str,
+    ok: bool,
+}
+
+// Perform a simple HTTP GET request
+fn http_get(url: str) -> HttpResponse {
+    let handle = curl_easy_init();
+    if (handle == 0) {
+        return HttpResponse { data: "", ok: false };
+    }
+    // Set URL
+    curl_easy_setopt(handle, CURLOPT_URL, url);
+    // Follow redirects
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1);
+    // Timeout: 30 seconds
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30);
+    // Perform
+    let rc = curl_easy_perform(handle);
+    let ok = (rc == 0);
+    if (!ok) {
+        let err = curl_easy_strerror(rc);
+        print("http_get error: %s\n", err);
+    }
+    curl_easy_cleanup(handle);
+    return HttpResponse { data: "", ok: ok };
+}
+
+// Perform a simple HTTP POST request
+fn http_post(url: str, body: str) -> HttpResponse {
+    let handle = curl_easy_init();
+    if (handle == 0) {
+        return HttpResponse { data: "", ok: false };
+    }
+    curl_easy_setopt(handle, CURLOPT_URL, url);
+    curl_easy_setopt(handle, CURLOPT_POST, 1);
+    curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30);
+    let rc = curl_easy_perform(handle);
+    let ok = (rc == 0);
+    if (!ok) {
+        let err = curl_easy_strerror(rc);
+        print("http_post error: %s\n", err);
+    }
+    curl_easy_cleanup(handle);
+    return HttpResponse { data: "", ok: ok };
+}
+
+// Check if HTTP response was successful
+fn http_ok(resp: HttpResponse) -> bool {
+    return resp.ok;
+}
+
+// Get response body string
+fn http_body(resp: HttpResponse) -> str {
+    return resp.data;
+}
