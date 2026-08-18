@@ -14,10 +14,20 @@ pub enum TokenKind {
     Else,
     #[token("while")]
     While,
+    #[token("loop")]
+    Loop,
+    #[token("for")]
+    For,
+    #[token("in")]
+    In,
     #[token("fn")]
     Fn,
     #[token("return")]
     Return,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
     #[token("true")]
     True,
     #[token("false")]
@@ -32,17 +42,63 @@ pub enum TokenKind {
     Extern,
     #[token("gpu")]
     Gpu,
+    #[token("match")]
+    Match,
+    #[token("struct")]
+    Struct,
+    #[token("union")]
+    Union,
+    #[token("enum")]
+    Enum,
+    #[token("trait")]
+    Trait,
+    #[token("impl")]
+    Impl,
+    #[token("type")]
+    Type,
+    #[token("dyn")]
+    Dyn,
+    #[token("as")]
+    As,
+    #[token("const")]
+    Const,
+    #[token("mod")]
+    Mod,
+    #[token("use")]
+    Use,
+    #[token("pub")]
+    Pub,
+    #[token("crate")]
+    Crate,
 
     // Literals and identifiers
+    /// Float literal, e.g. `3.14`, `1.0`, `2.5e10`
+    #[regex(r"[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9]+[eE][+-]?[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
+    Float(f64),
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Int(i64),
+    /// Char literal, e.g. `'a'`, `'\n'`
+    #[regex(r"'([^'\\]|\\.)'", |lex| {
+        let slice = lex.slice();
+        let inner = &slice[1..slice.len() - 1];
+        Some(unescape_char(inner))
+    })]
+    Char(char),
     /// String literal, e.g. `"hello\n"` (escape sequences already decoded)
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let slice = lex.slice();
         Some(unescape_str(&slice[1..slice.len() - 1]))
     })]
     Str(String),
-    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| Some(lex.slice().to_string()))]
+    #[token("_")]
+    Underscore,
+    /// Lifetime parameter, e.g. `'a` in `fn foo<'a>(x: &'a T) -> &'a T`.
+    /// A char literal `'a'` is 3 chars and wins the longest-match; a bare `'a`
+    /// (no closing quote) is a lifetime.
+    #[regex(r"'[a-zA-Z_][a-zA-Z0-9_]*", |lex| Some(lex.slice().to_string()))]
+    Lifetime(String),
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| Some(lex.slice().to_string()), priority = 1)]
     Ident(String),
 
     // Operators and punctuation
@@ -54,16 +110,30 @@ pub enum TokenKind {
     Star,
     #[token("/")]
     Slash,
+    #[token("%")]
+    Percent,
     #[token("&")]
     Amp,
+    #[token("^")]
+    Caret,
+    #[token("|")]
+    Pipe,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
     #[token(".")]
     Dot,
     #[token("=")]
     Eq,
     #[token(":")]
     Colon,
+    #[token("::")]
+    DoubleColon,
     #[token("->")]
     Arrow,
+    #[token("=>")]
+    FatArrow,
     // Comparison operators (longest-match first: `>=` before `>`)
     #[token(">=")]
     Ge,
@@ -98,6 +168,10 @@ pub enum TokenKind {
     Semi,
     #[token(",")]
     Comma,
+    #[token("?")]
+    Question,
+    #[token("#")]
+    Hash,
 
     // Whitespace is skipped (comments are pre-removed in lex())
     #[regex(r"[ \t\r\n]+", logos::skip)]
@@ -121,18 +195,47 @@ impl TokenKind {
             TokenKind::Tensor => "keyword `tensor`",
             TokenKind::Extern => "keyword `extern`",
             TokenKind::Gpu => "keyword `gpu`",
+            TokenKind::For => "keyword `for`",
+            TokenKind::Loop => "keyword `loop`",
+            TokenKind::In => "keyword `in`",
+            TokenKind::Break => "keyword `break`",
+            TokenKind::Continue => "keyword `continue`",
+            TokenKind::Match => "keyword `match`",
+            TokenKind::Struct => "keyword `struct`",
+            TokenKind::Union => "keyword `union`",
+            TokenKind::Enum => "keyword `enum`",
+            TokenKind::Trait => "keyword `trait`",
+            TokenKind::Impl => "keyword `impl`",
+            TokenKind::Type => "keyword `type`",
+            TokenKind::Dyn => "keyword `dyn`",
+            TokenKind::As => "keyword `as`",
+            TokenKind::Const => "keyword `const`",
+            TokenKind::Mod => "keyword `mod`",
+            TokenKind::Use => "keyword `use`",
+            TokenKind::Pub => "keyword `pub`",
+            TokenKind::Crate => "keyword `crate`",
+            TokenKind::Float(_) => "float",
             TokenKind::Int(_) => "integer",
+            TokenKind::Char(_) => "char",
             TokenKind::Str(_) => "string",
+            TokenKind::Lifetime(_) => "lifetime parameter",
             TokenKind::Ident(_) => "identifier",
             TokenKind::Plus => "operator `+`",
             TokenKind::Minus => "operator `-`",
             TokenKind::Star => "operator `*`",
             TokenKind::Slash => "operator `/`",
+            TokenKind::Percent => "operator `%`",
             TokenKind::Amp => "operator `&`",
+            TokenKind::Caret => "operator `^`",
+            TokenKind::Pipe => "operator `|`",
+            TokenKind::Shl => "operator `<<`",
+            TokenKind::Shr => "operator `>>`",
             TokenKind::Dot => "dot `.`",
             TokenKind::Eq => "operator `=`",
             TokenKind::Colon => "colon `:`",
+            TokenKind::DoubleColon => "double colon `::`",
             TokenKind::Arrow => "arrow `->`",
+            TokenKind::FatArrow => "fat arrow `=>`",
             TokenKind::Ge => "operator `>=`",
             TokenKind::Le => "operator `<=`",
             TokenKind::EqEq => "operator `==`",
@@ -149,6 +252,9 @@ impl TokenKind {
             TokenKind::RBracket => "right bracket `]`",
             TokenKind::Semi => "semicolon `;`",
             TokenKind::Comma => "comma `,`",
+            TokenKind::Question => "question mark `?`",
+            TokenKind::Hash => "hash `#`",
+            TokenKind::Underscore => "underscore `_`",
             TokenKind::Whitespace => "whitespace",
         }
     }
@@ -173,6 +279,28 @@ pub struct LexError {
     pub msg: String,
     pub line: u32,
     pub col: u32,
+}
+
+/// Decode a single escape sequence in a char literal.
+fn unescape_char(s: &str) -> char {
+    // Only treat as an escape sequence when it actually starts with a backslash.
+    // Multi-byte UTF-8 chars (len > 1 bytes) are literal code points, not escapes.
+    if !s.starts_with('\\') {
+        return s.chars().next().unwrap();
+    }
+    let mut chars = s.chars();
+    chars.next(); // skip backslash
+    match chars.next() {
+        Some('n') => '\n',
+        Some('t') => '\t',
+        Some('r') => '\r',
+        Some('\\') => '\\',
+        Some('\'') => '\'',
+        Some('"') => '"',
+        Some('0') => '\0',
+        Some(other) => other,
+        None => '\\',
+    }
 }
 
 /// Decode escape sequences inside string literals: `\n`, `\t`, `\r`, `\\`, `\"`.

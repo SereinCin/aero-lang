@@ -1,0 +1,46 @@
+// aero-time
+// Time formatting utilities. No syscall to get the current timestamp
+// yet — timestamp() returns a placeholder until clock_gettime lands.
+
+// Seconds → "secs.000" string. Just a stub for now.
+fn format_timestamp(secs: i64) -> str {
+    return format("%d.000", secs);
+}
+
+// Seconds → "Xh Xm Xs" via repeated division.
+// Didn't handle negative inputs at first — need abs() for production.
+fn format_duration(secs: i64) -> str {
+    if (secs < 60) {
+        return format("%ds", secs);
+    }
+    let minutes = secs / 60;
+    let remain_secs = secs % 60;
+    if (minutes < 60) {
+        return format("%dm %ds", minutes, remain_secs);
+    }
+    let hours = minutes / 60;
+    let remain_min = minutes % 60;
+    return format("%dh %dm %ds", hours, remain_min, remain_secs);
+}
+
+// Bytes → B/KB/MB/GB, base 1024.
+fn format_bytes(bytes: i64) -> str {
+    if (bytes < 1024) {
+        return format("%d B", bytes);
+    }
+    let kb = bytes / 1024;
+    if (kb < 1024) {
+        return format("%d KB", kb);
+    }
+    let mb = kb / 1024;
+    if (mb < 1024) {
+        return format("%d MB", mb);
+    }
+    let gb = mb / 1024;
+    return format("%d GB", gb);
+}
+
+// Placeholder. Will call clock_gettime once we have the FFI binding.
+fn timestamp() -> str {
+    return "now";
+}

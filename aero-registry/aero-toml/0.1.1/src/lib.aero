@@ -1,0 +1,72 @@
+// aero-toml: Simple TOML parser
+// Parse basic TOML key-value pairs
+
+// TOML value: stores a string value
+struct TomlValue {
+    key: str,
+    value: str,
+}
+
+// Parse a TOML line: `key = "value"` or `key = 123`
+fn toml_parse_line(line: str) -> TomlValue {
+    let mut eq_pos: i64 = -1;
+    let mut i: i64 = 0;
+    while (i < line.len()) {
+        if (line.at(i) == 61) { // '='
+            eq_pos = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if (eq_pos < 0) {
+        return TomlValue { key: "", value: "" };
+    }
+    // Extract key (trim trailing whitespace)
+    let mut key = "";
+    let mut ki: i64 = 0;
+    while (ki < eq_pos && line.at(ki) <= 32) {
+        ki = ki + 1;
+    }
+    while (ki < eq_pos) {
+        if (line.at(ki) > 32) {
+            key = key + line.at(ki);
+        }
+        ki = ki + 1;
+    }
+    // Extract value (trim leading whitespace and quotes)
+    let mut vi = eq_pos + 1;
+    while (vi < line.len() && line.at(vi) <= 32) {
+        vi = vi + 1;
+    }
+    let mut value = "";
+    let mut in_quotes = false;
+    while (vi < line.len()) {
+        let ch = line.at(vi);
+        if (ch == 34) { // '"'
+            if (in_quotes) {
+                break;
+            }
+            in_quotes = true;
+        } else {
+            value = value + ch;
+        }
+        vi = vi + 1;
+    }
+    return TomlValue { key: key, value: value };
+}
+
+// Check if a line is a section header (starts with [)
+fn toml_is_section(line: str) -> bool {
+    if (line.len() == 0) {
+        return false;
+    }
+    return line.at(0) == 91; // '['
+}
+
+// Check if a line is a comment (starts with #)
+fn toml_is_comment(line: str) -> bool {
+    if (line.len() == 0) {
+        return false;
+    }
+    return line.at(0) == 35; // '#'
+}

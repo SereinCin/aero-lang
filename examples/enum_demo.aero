@@ -1,0 +1,52 @@
+// Enum demo: algebraic data types end to end
+struct Rect {
+    w: i64,
+    h: i64,
+}
+
+enum Maybe {
+    Nothing,
+    Just(i64),
+}
+
+enum Shape {
+    Circle(f64),
+    Box(Rect),
+}
+
+fn describe(m: Maybe) -> i64 {
+    match (m) {
+        Nothing => { return 0; }
+        Just(v) => { return v; }
+    }
+    return -1;
+}
+
+fn area(s: Shape) -> i64 {
+    match (s) {
+        Circle(r) => { return 1; }
+        Box(b) => { return b.w * b.h; }
+    }
+    return -1;
+}
+
+let a = Maybe::Nothing;
+let b = Maybe::Just(42);
+print("a = %lld\n", describe(a));
+print("b = %lld\n", describe(b));
+
+// Bare variant patterns and explicit constructor form both work
+let c = Maybe::Just(7);
+match (c) {
+    Nothing => { print("c is nothing\n"); }
+    Just(x) => { print("c = %lld\n", x); }
+}
+
+let s = Shape::Box(Rect { w: 3, h: 4 });
+print("area = %lld\n", area(s));
+
+let t = Shape::Circle(2.5);
+match (t) {
+    Circle(r) => { print("circle\n"); }
+    Box(b) => { print("box %lld %lld\n", b.w, b.h); }
+}

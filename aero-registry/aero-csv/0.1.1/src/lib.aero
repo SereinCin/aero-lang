@@ -1,0 +1,80 @@
+// aero-csv: CSV parser
+// Parse CSV strings into records
+
+// Count the number of records (lines) in a CSV string
+fn csv_count_lines(s: str) -> i64 {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    while (i < s.len()) {
+        if (s.at(i) == 10) { // '\n'
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if (s.len() > 0 && s.at(s.len() - 1) != 10) {
+        count = count + 1;
+    }
+    return count;
+}
+
+// Get the Nth record (line) from a CSV string, 0-indexed
+fn csv_get_record(s: str, n: i64) -> str {
+    let mut line_start: i64 = 0;
+    let mut current: i64 = 0;
+    let mut i: i64 = 0;
+    while (i < s.len()) {
+        if (current == n) {
+            // Read until end of line
+            let mut line = "";
+            let mut j = i;
+            while (j < s.len() && s.at(j) != 10) {
+                line = line + s.at(j);
+                j = j + 1;
+            }
+            return line;
+        }
+        if (s.at(i) == 10) {
+            current = current + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// Count fields in a CSV record (comma-separated)
+fn csv_count_fields(record: str) -> i64 {
+    if (record.len() == 0) {
+        return 0;
+    }
+    let mut count: i64 = 1;
+    let mut i: i64 = 0;
+    while (i < record.len()) {
+        if (record.at(i) == 44) { // ','
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+// Get the Nth field from a CSV record, 0-indexed
+fn csv_get_field(record: str, n: i64) -> str {
+    let mut current: i64 = 0;
+    let mut i: i64 = 0;
+    while (i < record.len()) {
+        if (current == n) {
+            let mut field = "";
+            let mut j = i;
+            while (j < record.len() && record.at(j) != 44) {
+                field = field + record.at(j);
+                j = j + 1;
+            }
+            return field;
+        }
+        if (record.at(i) == 44) {
+            current = current + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}

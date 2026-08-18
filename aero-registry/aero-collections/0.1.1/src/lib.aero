@@ -1,0 +1,77 @@
+// aero-collections: Advanced collections
+// Stack, Queue, and utility data structures
+
+// Stack: push/pop via a fixed-size i64 array
+struct Stack {
+    data: [i64; 64],
+    top: i64,
+}
+
+fn stack_new() -> Stack {
+    return Stack { data: [0; 64], top: 0 };
+}
+
+fn stack_push(s: *Stack, val: i64) {
+    let idx = s.top;
+    s.data[idx] = val;
+    s.top = s.top + 1;
+}
+
+fn stack_pop(s: *Stack) -> i64 {
+    if (s.top == 0) {
+        return 0;
+    }
+    s.top = s.top - 1;
+    return s.data[s.top];
+}
+
+fn stack_peek(s: *Stack) -> i64 {
+    if (s.top == 0) {
+        return 0;
+    }
+    return s.data[s.top - 1];
+}
+
+fn stack_is_empty(s: *Stack) -> bool {
+    return s.top == 0;
+}
+
+fn stack_len(s: *Stack) -> i64 {
+    return s.top;
+}
+
+// Queue: enqueue/dequeue via a fixed-size i64 array
+struct Queue {
+    data: [i64; 64],
+    head: i64,
+    tail: i64,
+    count: i64,
+}
+
+fn queue_new() -> Queue {
+    return Queue { data: [0; 64], head: 0, tail: 0, count: 0 };
+}
+
+fn queue_enqueue(q: *Queue, val: i64) {
+    q.data[q.tail] = val;
+    q.tail = (q.tail + 1) % 64;
+    q.count = q.count + 1;
+}
+
+fn queue_dequeue(q: *Queue) -> i64 {
+    if (q.count == 0) {
+        return 0;
+    }
+    let val = q.data[q.head];
+    q.head = (q.head + 1) % 64;
+    q.count = q.count - 1;
+    return val;
+}
+
+fn queue_is_empty(q: *Queue) -> bool {
+    return q.count == 0;
+}
+
+fn queue_len(q: *Queue) -> i64 {
+    return q.count;
+}
