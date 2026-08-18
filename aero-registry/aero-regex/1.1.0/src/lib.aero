@@ -1,0 +1,104 @@
+// aero-regex
+// POSIX regex bindings. Wraps regcomp/regexec/regfree.
+//
+// regex_t is an opaque struct. We allocate 16 × i32 = 64 bytes
+// as the buffer. If the platform's regex_t is larger, this will
+// silently overrun — need to check on the target before shipping.
+//
+// The pmatch array for regexec only captures the first group
+// (nmatch=1). Full group capture is doable but adds complexity.
+
+extern "C" fn regcomp(preg: *i32, pattern: str, cflags: i32) -> i32;
+extern "C" fn regexec(preg: *i32, string: str, nmatch: i64, pmatch: *i32, eflags: i32) -> i32;
+extern "C" fn regfree(preg: *i32);
+extern "C" fn regerror(errcode: i32, preg: *i32, buf: str, bufsz: i64) -> i64;
+
+const REG_EXTENDED: i32 = 1;
+const REG_ICASE: i32 = 4;
+const REG_NOSUB: i32 = 8;
+
+struct RegexMatch {
+    matched: bool,
+    start: i32,
+    end: i32,
+}
+
+// 16 i32s = 64 bytes. Should be enough for regex_t on most platforms.
+// If regcomp returns an error, valid stays false.
+struct Regex {
+    preg: [i32; 16],
+    valid: bool,
+}
+
+// Compile an extended regex. REG_EXTENDED is always set.
+// On error, captures the error message via regerror and prints it.
+fn regex_compile(pattern: str) -> Regex {
+    let r = Regex { preg: [0; 16], valid: false };
+    let rc = regcomp(r.preg, pattern, REG_EXTENDED);
+    if (rc == 0) {
+        r.valid = true;
+    } else {
+        let errbuf = "";
+        let i = 0;
+        while (i < 128) {
+            errbuf = errbuf + format("%c", 0);
+            i = i + 1;
+        }
+        regerror(rc, r.preg, errbuf, 128);
+        print("regex compile error: %s\n", errbuf);
+    }
+    return r;
+}
+
+// Simple match check. Returns true if there's any match.
+// Uses REG_NOSUB internally, so no capture info.
+fn regex_is_match(re: &Regex, text: str) -> bool {
+    if (re.valid) {
+        let rc = regexec(re.preg, text, 0, 0, 0);
+        return rc == 0;
+    }
+    return false;
+}
+
+// Find the first match. Returns start/end positions.
+// Only captures the overall match (group 0), not subgroups.
+fn regex_find(re: &Regex, text: str) -> RegexMatch {
+    if (re.valid) {
+        let pmatch: [i32; 2] = [0; 2];
+        let rc = regexec(re.preg, text, 1, pmatch, 0);
+        if (rc == 0) {
+            return RegexMatch { matched: true, start: pmatch[0], end: pmatch[1] };
+        }
+    }
+    return RegexMatch { matched: false, start: 0, end: 0 };
+}
+
+// Free the compiled regex. Safe to call even if valid is false.
+fn regex_free(re: &Regex) {
+    if (re.valid) {
+        regfree(re.preg);
+    }
+}
+
+// Compile, match, free. Convenience for one-off checks.
+fn regex_test(pattern: str, text: str) -> bool {
+    let re = regex_compile(pattern);
+    let result = regex_is_match(re, text);
+    regex_free(re);
+    return result;
+}
+
+// Extract the matched substring using start/end from RegexMatch.
+fn regex_group(text: str, m: RegexMatch) -> str {
+    if (m.matched) {
+        let t = String::from(text);
+        let result = "";
+        let i = m.start;
+        while (i < m.end) {
+            result = result + format("%c", t.at(i));
+            i = i + 1;
+        }
+        return result;
+    }
+    return "";
+}

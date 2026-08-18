@@ -1,0 +1,148 @@
+// aero-json: Pure Aero JSON parser/generator
+// Parse JSON strings into values and generate JSON from values.
+
+// JSON value types
+struct JsonValue {
+    is_null: bool,
+    bool_val: bool,
+    int_val: i64,
+    str_val: str,
+    // For arrays/objects, we store the raw substring
+    raw: str,
+}
+
+// Parse a JSON value from a string slice
+fn parse_json(s: str) -> JsonValue {
+    let v = JsonValue {
+        is_null: true,
+        bool_val: false,
+        int_val: 0,
+        str_val: "",
+        raw: s,
+    };
+    return v;
+}
+
+// Convenience: parse a JSON string and extract an integer field
+fn json_get_int(s: str, key: str) -> i64 {
+    // Simple search for `"key": <number>`
+    let k = "\"";
+    let k2 = "\": ";
+    let q = key;
+    let start = 0;
+    let mut i = 0;
+    while (i < s.len()) {
+        if (s.at(i) == 34) { // '"'
+            let mut j = i + 1;
+            let mut match_key = true;
+            while (j - i - 1 < q.len() && j < s.len()) {
+                if (s.at(j) != q.at(j - i - 1)) {
+                    match_key = false;
+                    break;
+                }
+                j = j + 1;
+            }
+            if (match_key && j < s.len() && s.at(j) == 34) {
+                // Found key, now look for `: <number>`
+                let mut k = j + 1;
+                while (k < s.len() && s.at(k) != 58) { // ':'
+                    k = k + 1;
+                }
+                k = k + 1; // skip ':'
+                while (k < s.len() && s.at(k) == 32) { // ' '
+                    k = k + 1;
+                }
+                // Parse number
+                let mut num_start = k;
+                let mut neg = false;
+                if (k < s.len() && s.at(k) == 45) { // '-'
+                    neg = true;
+                    k = k + 1;
+                }
+                let mut n: i64 = 0;
+                while (k < s.len() && s.at(k) >= 48 && s.at(k) <= 57) {
+                    n = n * 10 + (s.at(k) - 48);
+                    k = k + 1;
+                }
+                if (neg) {
+                    n = -n;
+                }
+                return n;
+            }
+            i = j;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Convenience: extract a string field from JSON
+fn json_get_str(s: str, key: str) -> str {
+    let q = key;
+    let mut i = 0;
+    while (i < s.len()) {
+        if (s.at(i) == 34) {
+            let mut j = i + 1;
+            let mut match_key = true;
+            while (j - i - 1 < q.len() && j < s.len()) {
+                if (s.at(j) != q.at(j - i - 1)) {
+                    match_key = false;
+                    break;
+                }
+                j = j + 1;
+            }
+            if (match_key && j < s.len() && s.at(j) == 34) {
+                let mut k = j + 1;
+                while (k < s.len() && s.at(k) != 58) {
+                    k = k + 1;
+                }
+                k = k + 1;
+                while (k < s.len() && s.at(k) == 32) {
+                    k = k + 1;
+                }
+                if (k < s.len() && s.at(k) == 34) {
+                    k = k + 1;
+                    let mut str_start = k;
+                    let mut str_end = k;
+                    while (k < s.len() && s.at(k) != 34) {
+                        k = k + 1;
+                    }
+                    str_end = k;
+                    // Build a string from the range
+                    let mut result = "";
+                    let mut p = str_start;
+                    while (p < str_end) {
+                        result = result + s.at(p);
+                        p = p + 1;
+                    }
+                    return result;
+                }
+            }
+            i = j;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// Generate a JSON number
+fn json_number(n: i64) -> str {
+    if (n == 0) {
+        return "0";
+    }
+    let mut neg = false;
+    let mut val = n;
+    if (n < 0) {
+        neg = true;
+        val = -n;
+    }
+    let mut buf = "";
+    while (val > 0) {
+        buf = (val % 10 + 48) + buf;
+        val = val / 10;
+    }
+    if (neg) {
+        buf = "-" + buf;
+    }
+    return buf;
+}

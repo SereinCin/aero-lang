@@ -9,7 +9,9 @@
 //! No external TOML crate: the toolchain stays self-contained (buildable offline).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::semver::Requirement;
 
 /// Manifest parsing error.
 #[derive(Debug, Clone)]
@@ -19,11 +21,27 @@ pub struct ManifestError {
     pub msg: String,
 }
 
+/// 读取并解析一个目录里的 `Aero.toml`（供注册表 / 构建流程复用）。
+pub fn load_manifest_from(dir: &Path) -> Result<Manifest, crate::graph::PmError> {
+    let path = dir.join("Aero.toml");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| crate::graph::PmError::new(format!("cannot read {}: {}", path.display(), e)))?;
+    parse_manifest(&text)
+        .map_err(|e| crate::graph::PmError::new(format!("{}:{}: {}", e.line, e.col, e.msg)))
+}
+
 /// A parsed dependency entry.
+///
+/// - `{ path = "..." }` / 字符串形式 → 路径依赖（`path` 有效，`version_req` 为空）；
+/// - `{ version = "..." }` → 注册表依赖（`path` 为空，`version_req` 有效）；
+/// - `{ path = "...", version = "..." }` → 路径依赖同时钉定版本（`version_req` 也记录）。
 #[derive(Debug, Clone)]
 pub struct Dep {
     pub name: String,
+    /// 路径依赖的相对路径；注册表依赖为空。
     pub path: PathBuf,
+    /// 语义化版本需求；路径依赖通常为空。
+    pub version_req: Option<Requirement>,
 }
 
 /// An Aero package manifest.
@@ -69,18 +87,47 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, ManifestError> {
             msg: "`[dependencies]` must be a table".to_string(),
         })?;
         for (dep_name, val) in deps_tbl {
-            let path = match val {
-                TomlValue::Str(s) => PathBuf::from(s),
-                TomlValue::Table(t) => match t.get("path") {
-                    Some(TomlValue::Str(s)) => PathBuf::from(s),
-                    _ => {
-                        return Err(ManifestError {
-                            line: 0,
-                            col: 0,
-                            msg: format!("dependency `{dep_name}` needs `path = \"...\"`"),
-                        })
+            let (path, version_req) = match val {
+                // 字符串形式保持兼容：视为路径依赖
+                TomlValue::Str(s) => (PathBuf::from(s), None),
+                TomlValue::Table(t) => {
+                    let path = match t.get("path") {
+                        Some(TomlValue::Str(s)) => Some(PathBuf::from(s)),
+                        _ => None,
+                    };
+                    let version_req = match t.get("version") {
+                        Some(TomlValue::Str(s)) => {
+                            match Requirement::parse(s) {
+                                Some(r) => Some(r),
+                                None => {
+                                    return Err(ManifestError {
+                                        line: 0,
+                                        col: 0,
+                                        msg: format!(
+                                            "dependency `{dep_name}` has invalid version requirement `{s}`"
+                                        ),
+                                    })
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
+                    match (path, version_req) {
+                        // 仅版本需求 → 注册表依赖
+                        (None, Some(req)) => (PathBuf::new(), Some(req)),
+                        // 仅路径 / 路径+版本 → 路径依赖
+                        (Some(p), req) => (p, req),
+                        (None, None) => {
+                            return Err(ManifestError {
+                                line: 0,
+                                col: 0,
+                                msg: format!(
+                                    "dependency `{dep_name}` needs `path = \"...\"` and/or `version = \"...\"`"
+                                ),
+                            })
+                        }
                     }
-                },
+                }
                 _ => {
                     return Err(ManifestError {
                         line: 0,
@@ -92,6 +139,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, ManifestError> {
             deps.push(Dep {
                 name: dep_name.clone(),
                 path,
+                version_req,
             });
         }
     }
@@ -565,10 +613,26 @@ mod tests {
     }
 
     #[test]
-    fn dep_without_path_rejected() {
-        let err = parse_manifest("[package]\nname=\"a\"\nversion=\"1\"\n[dependencies]\nx = { version = \"1\" }\n")
+    fn version_only_dep_is_registry_dep() {
+        let m = parse_manifest("[package]\nname=\"a\"\nversion=\"1\"\n[dependencies]\nx = { version = \"^1.2\" }\n")
+            .unwrap();
+        assert_eq!(m.deps.len(), 1);
+        assert!(m.deps[0].version_req.is_some());
+        assert!(m.deps[0].path.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn dep_without_path_or_version_rejected() {
+        let err = parse_manifest("[package]\nname=\"a\"\nversion=\"1\"\n[dependencies]\nx = { }\n")
             .unwrap_err();
-        assert!(err.msg.contains("path"));
+        assert!(err.msg.contains("path"), "got: {}", err.msg);
+    }
+
+    #[test]
+    fn invalid_version_requirement_rejected() {
+        let err = parse_manifest("[package]\nname=\"a\"\nversion=\"1\"\n[dependencies]\nx = { version = \"not-a-version\" }\n")
+            .unwrap_err();
+        assert!(err.msg.contains("invalid version"), "got: {}", err.msg);
     }
 
     #[test]

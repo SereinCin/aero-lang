@@ -1,0 +1,80 @@
+// aero-toml
+// Minimal TOML key-value parser. Handles `key = "value"` and
+// `key = 123` on flat lines. Sections and tables are recognized
+// but not interpreted — you get the raw key back.
+
+struct TomlValue {
+    key: str,
+    value: str,
+}
+
+// Parse a single TOML line. Finds the `=` sign, splits on it.
+// Trims whitespace around key and value. Handles quoted strings.
+fn toml_parse_line(line: str) -> TomlValue {
+    let src = String::from(line);
+    let n = src.len();
+    let eq_pos = -1;
+    let i = 0;
+    while (i < n) {
+        if (src.at(i) == 61) {
+            eq_pos = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if (eq_pos < 0) {
+        return TomlValue { key: "", value: "" };
+    }
+    // key: take everything before `=`, trim trailing whitespace
+    let key = "";
+    let ki = 0;
+    while ((ki < eq_pos) && (src.at(ki) <= 32)) {
+        ki = ki + 1;
+    }
+    while (ki < eq_pos) {
+        if (src.at(ki) > 32) {
+            key = key + format("%c", src.at(ki));
+        }
+        ki = ki + 1;
+    }
+    // value: skip leading whitespace and the opening quote if present
+    let vi = eq_pos + 1;
+    while ((vi < n) && (src.at(vi) <= 32)) {
+        vi = vi + 1;
+    }
+    let value = "";
+    let in_quotes = false;
+    while (vi < n) {
+        let ch = src.at(vi);
+        if (ch == 34) {
+            if (in_quotes) {
+                break;
+            }
+            in_quotes = true;
+        } else {
+            value = value + format("%c", ch);
+        }
+        vi = vi + 1;
+    }
+    return TomlValue { key: key, value: value };
+}
+
+// Check if a line is a section header (starts with '[')
+fn toml_is_section(line: str) -> bool {
+    let src = String::from(line);
+    let n = src.len();
+    if (n == 0) {
+        return false;
+    }
+    return src.at(0) == 91;
+}
+
+// Check if a line is a comment (starts with '#')
+fn toml_is_comment(line: str) -> bool {
+    let src = String::from(line);
+    let n = src.len();
+    if (n == 0) {
+        return false;
+    }
+    return src.at(0) == 35;
+}

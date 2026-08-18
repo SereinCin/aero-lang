@@ -1,10 +1,11 @@
 use inkwell::module::Module;
-use inkwell::OptimizationLevel;
+
+use crate::aot::OptLevel;
 
 /// Compile and execute the module's `main` in memory via MCJIT.
-pub fn run_jit(module: &Module) -> Result<(), String> {
+pub fn run_jit(module: &Module, opt: OptLevel) -> Result<(), String> {
     let engine = module
-        .create_jit_execution_engine(OptimizationLevel::Aggressive)
+        .create_jit_execution_engine(opt.inkwell())
         .map_err(|e| format!("failed to create JIT execution engine: {e}"))?;
 
     unsafe {

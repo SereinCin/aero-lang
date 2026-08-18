@@ -1,0 +1,90 @@
+// aero-csv
+// Line-splitting CSV, no quote-aware parsing.
+// If your data has commas inside quoted fields, this won't work.
+// A proper state machine is on the list.
+
+// Count lines by scanning for newlines. Off-by-one hazard:
+// if the last line has no trailing newline, it still counts.
+fn csv_count_lines(s: str) -> i64 {
+    let src = String::from(s);
+    let n = src.len();
+    let count = 0;
+    let i = 0;
+    while (i < n) {
+        if (src.at(i) == 10) {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if ((n > 0) && (src.at(n - 1) != 10)) {
+        count = count + 1;
+    }
+    return count;
+}
+
+// Return the n-th record (0-indexed). Scans until it finds the nth newline,
+// then copies everything until the next one.
+fn csv_get_record(s: str, n: i64) -> str {
+    let src = String::from(s);
+    let sl = src.len();
+    let current = 0;
+    let i = 0;
+    while (i < sl) {
+        if (current == n) {
+            let line = "";
+            let j = i;
+            while ((j < sl) && (src.at(j) != 10)) {
+                line = line + format("%c", src.at(j));
+                j = j + 1;
+            }
+            return line;
+        }
+        if (src.at(i) == 10) {
+            current = current + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// Count commas + 1. Empty string → 0.
+fn csv_count_fields(record: str) -> i64 {
+    let r = String::from(record);
+    let n = r.len();
+    if (n == 0) {
+        return 0;
+    }
+    let count = 1;
+    let i = 0;
+    while (i < n) {
+        if (r.at(i) == 44) {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+// Return the n-th comma-separated field (0-indexed).
+fn csv_get_field(record: str, n: i64) -> str {
+    let r = String::from(record);
+    let rl = r.len();
+    let current = 0;
+    let i = 0;
+    while (i < rl) {
+        if (current == n) {
+            let field = "";
+            let j = i;
+            while ((j < rl) && (r.at(j) != 44)) {
+                field = field + format("%c", r.at(j));
+                j = j + 1;
+            }
+            return field;
+        }
+        if (r.at(i) == 44) {
+            current = current + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}

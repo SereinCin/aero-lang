@@ -15,7 +15,7 @@ pub mod lower;
 pub mod ty;
 
 pub use borrowck::BorrowError;
-pub use hir::{HirBlock, HirExpr, HirFn, HirProgram, HirStmt};
+pub use hir::{HirBlock, HirEnumDef, HirExpr, HirFn, HirMatchArm, HirMatchPattern, HirProgram, HirStmt, HirStructDef};
 pub use infer::{GenericInstance, InferError, InferResult};
 pub use lower::LowerError;
 pub use ty::Ty;
@@ -26,14 +26,29 @@ use aero_parse::ast::Program;
 ///
 /// plus generic instance info. On success returns `(HirProgram, InferResult)`.
 pub fn lower_and_check(program: &Program) -> Result<(HirProgram, InferResult), HircError> {
-    let hir = lower::Lowerer::lower(program)?;
+    let mut hir = lower::Lowerer::lower(program)?;
     let result = infer::Infer::check(&hir)?;
+    // Write back the inferred const value types so unannotated consts (and their
+    // `ConstRef` uses) carry the real type instead of the placeholder `i64`
+    // (Phase P0-3, e.g. `const f = 2.5 * 2.0;` must infer `f64`).
+    for c in &mut hir.consts {
+        if let Some(t) = result.const_tys.get(&c.name) {
+            c.ty = t.clone();
+        }
+    }
     Ok((hir, result))
 }
 
-/// Borrow check (Campaign 2): an independent memory-safety pass over the typed HIR.
-pub fn check_borrows(program: &HirProgram) -> Result<(), BorrowError> {
-    borrowck::check(program)
+/// Borrow + move check (Campaign 2/4): an independent memory-safety pass over the typed
+/// HIR. `var_tys` (from inference) is needed to decide which types are `Copy`.
+///
+/// Returns the per-scope moved-variable map (see [`borrowck::check`]) on success;
+/// codegen uses it to avoid dropping moved values (Phase 6 Drop/RAII).
+pub fn check_borrows(
+    program: &HirProgram,
+    var_tys: &std::collections::HashMap<hir::DefId, Ty>,
+) -> Result<std::collections::HashMap<hir::ScopeId, std::collections::HashSet<hir::DefId>>, BorrowError> {
+    borrowck::check(program, var_tys)
 }
 
 /// Unified HIR-phase error.
@@ -250,6 +265,281 @@ mod tests {
     fn unknown_type_rejected() {
         let err = check("let x: float = 1;").unwrap_err();
         assert!(err_msg(&err).contains("unknown type"));
+    }
+
+    #[test]
+    fn struct_literal_type_checked() {
+        let (hir, result) =
+            check("struct Point { x: i64, y: i64 } let p = Point { x: 1, y: 2 };").unwrap();
+        // The struct definition is collected at the HIR level
+        assert_eq!(hir.structs.len(), 1);
+        assert_eq!(hir.structs[0].name, "Point");
+        // The variable `p` has the named struct type
+        let p_ty = result.var_tys.values().next().unwrap();
+        assert_eq!(*p_ty, Ty::Struct("Point".to_string()));
+    }
+
+    #[test]
+    fn struct_field_access_type_checked() {
+        let (_, result) = check(
+            "struct Point { x: i64, y: i64 } let p = Point { x: 1, y: 2 }; print(p.y);",
+        )
+        .unwrap();
+        let _ = result;
+    }
+
+    #[test]
+    fn struct_missing_field_rejected() {
+        let err = check("struct Point { x: i64 } let p = Point { y: 2 };").unwrap_err();
+        assert!(err_msg(&err).contains("no field"));
+    }
+
+    #[test]
+    fn struct_unknown_field_rejected() {
+        let err = check("struct Point { x: i64 } let p = Point { x: 1 }; print(p.z);").unwrap_err();
+        assert!(err_msg(&err).contains("no field"));
+    }
+
+    #[test]
+    fn struct_field_type_mismatch_rejected() {
+        let err = check("struct Point { x: i64 } let p = Point { x: true };").unwrap_err();
+        assert!(err_msg(&err).contains("type mismatch"));
+    }
+
+    #[test]
+    fn struct_duplicate_field_rejected() {
+        let err = check("struct Point { x: i64, x: i64 }").unwrap_err();
+        assert!(err_msg(&err).contains("duplicate field"));
+    }
+
+    #[test]
+    fn struct_unknown_type_in_field_rejected() {
+        let err = check("struct Point { x: Nope }").unwrap_err();
+        assert!(err_msg(&err).contains("unknown type"));
+    }
+
+    #[test]
+    fn struct_as_fn_param_and_return() {
+        let (_, result) = check(
+            "struct Point { x: i64, y: i64 }
+             fn dist2(p: Point) -> i64 { return p.x * p.x + p.y * p.y; }
+             let d = dist2(Point { x: 3, y: 4 });",
+        )
+        .unwrap();
+        let _ = result;
+    }
+
+    // ---------- enum algebraic data types ----------
+
+    #[test]
+    fn enum_definition_collected() {
+        let (hir, result) =
+            check("enum Maybe { Nothing, Just(i64) } let a = Maybe::Nothing; let b = Maybe::Just(1);")
+                .unwrap();
+        assert_eq!(hir.enums.len(), 1);
+        assert_eq!(hir.enums[0].name, "Maybe");
+        assert_eq!(hir.enums[0].variants.len(), 2);
+        let a_ty = result.var_tys.iter().find(|(_, t)| **t == Ty::Enum("Maybe".into())).map(|(_, t)| t.clone()).unwrap();
+        assert_eq!(a_ty, Ty::Enum("Maybe".to_string()));
+    }
+
+    #[test]
+    fn enum_literal_payload_type_checked() {
+        // f64 payload rejects an i64 literal under annotation, but the plain literal adapts
+        let err = check("enum E { A(i64) } let e: E = E::A(true);").unwrap_err();
+        assert!(err_msg(&err).contains("type mismatch"));
+    }
+
+    #[test]
+    fn enum_variant_payload_required_and_forbidden() {
+        let err = check("enum E { A(i64), B } let e = E::A;").unwrap_err();
+        assert!(err_msg(&err).contains("payload"));
+        let err = check("enum E { A(i64), B } let e = E::B(1);").unwrap_err();
+        assert!(err_msg(&err).contains("payload"));
+    }
+
+    #[test]
+    fn enum_unknown_variant_rejected() {
+        let err = check("enum E { A, B } let e = E::C;").unwrap_err();
+        assert!(err_msg(&err).contains("no variant"));
+    }
+
+    #[test]
+    fn enum_match_binds_payload() {
+        check(
+            "enum Maybe { Nothing, Just(i64) }
+             let b = Maybe::Just(42);
+             match (b) {
+                 Nothing => { print(0); }
+                 Just(v) => { print(v); }
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn enum_match_scrutinee_mismatch_rejected() {
+        let err = check(
+            "enum E { A, B }
+             let x = 1;
+             match (x) { A => { print(0); } B => { print(1); } }",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("scrutinee"));
+    }
+
+    #[test]
+    fn enum_as_fn_param_and_return() {
+        check(
+            "enum Maybe { Nothing, Just(i64) }
+             fn unwrap(m: Maybe) -> i64 {
+                 match (m) {
+                     Nothing => { return 0; }
+                     Just(v) => { return v; }
+                 }
+                 return -1;
+             }
+             let x = unwrap(Maybe::Just(7));",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn enum_duplicate_variant_rejected() {
+        let err = check("enum E { A, A }").unwrap_err();
+        assert!(err_msg(&err).contains("duplicate variant"));
+    }
+
+    #[test]
+    fn enum_name_conflicts_with_struct_rejected() {
+        let err = check("enum E { A } struct E { x: i64 }").unwrap_err();
+        assert!(err_msg(&err).contains("already defined"));
+    }
+
+    // ---------- trait system ----------
+
+    #[test]
+    fn trait_definition_collected() {
+        let (hir, _) = check(
+            "trait Drawable { fn draw(s: Square); }
+             struct Square { side: i64, }",
+        )
+        .unwrap();
+        assert_eq!(hir.traits.len(), 1);
+        assert_eq!(hir.traits[0].name, "Drawable");
+        assert_eq!(hir.traits[0].methods.len(), 1);
+        assert_eq!(hir.traits[0].methods[0].name, "draw");
+    }
+
+    #[test]
+    fn trait_impl_resolved() {
+        let (hir, _) = check(
+            "trait Drawable { fn draw(s: Square); }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }
+             let s = Square { side: 1 };
+             s.draw();",
+        )
+        .unwrap();
+        assert_eq!(hir.impls.len(), 1);
+        assert_eq!(hir.impls[0].type_name, "Square");
+        assert!(hir
+            .method_map
+            .contains_key(&("Square".to_string(), "draw".to_string())));
+    }
+
+    #[test]
+    fn trait_inherent_method_resolved() {
+        let (hir, _) = check(
+            "struct Rect { w: i64, h: i64, }
+             impl Rect { fn area(r: Rect) -> i64 { return r.w * r.h; } }
+             let r = Rect { w: 3, h: 4 };
+             print(r.area());",
+        )
+        .unwrap();
+        assert!(hir
+            .method_map
+            .contains_key(&("Rect".to_string(), "area".to_string())));
+    }
+
+    #[test]
+    fn trait_impl_missing_method_rejected() {
+        let err = check(
+            "trait Drawable { fn draw(s: Square); fn name(s: Square); }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("not implemented"));
+    }
+
+    #[test]
+    fn trait_impl_signature_mismatch_rejected() {
+        let err = check(
+            "trait Drawable { fn draw(s: Square) -> i64; }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("return type mismatch"));
+    }
+
+    #[test]
+    fn trait_duplicate_impl_rejected() {
+        let err = check(
+            "trait Drawable { fn draw(s: Square); }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }
+             impl Drawable for Square { fn draw(s: Square) { print(2); } }",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("already implemented"));
+    }
+
+    #[test]
+    fn trait_bound_satisfied() {
+        check(
+            "trait Drawable { fn draw(s: Square); }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }
+             fn draw_area<T: Drawable>(d: T) { d.draw(); }
+             let s = Square { side: 1 };
+             draw_area(s);",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn trait_bound_not_satisfied_rejected() {
+        let err = check(
+            "trait Drawable { fn draw(s: Square); }
+             struct Square { side: i64, }
+             impl Drawable for Square { fn draw(s: Square) { print(1); } }
+             fn draw_area<T: Drawable>(d: T) { d.draw(); }
+             draw_area(42);",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("does not implement trait"));
+    }
+
+    #[test]
+    fn trait_unknown_method_rejected() {
+        let err = check(
+            "struct Point { x: i64, y: i64, }
+             let p = Point { x: 1, y: 2 };
+             p.unknown();",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("has no method"));
+    }
+
+    #[test]
+    fn trait_unbounded_generic_method_rejected() {
+        let err = check(
+            "fn f<T>(x: T) { x.method(); }",
+        )
+        .unwrap_err();
+        assert!(err_msg(&err).contains("has no trait bound"));
     }
 
     // Allow parse_source to return an AST directly (for span utility tests)
