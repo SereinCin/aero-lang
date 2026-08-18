@@ -1,40 +1,112 @@
-# Aero Programming Language
+# Aero
 
-Aero is an LLVM-based statically typed systems programming language that combines the high performance of C with memory safety inspired by Rust's design.
+A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
+
+## Quick Start
+
+### Windows
+1. Download `Aero-1.1.2-win64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+2. Extract to any folder, double-click `install.bat`
+3. Open a new cmd window and run `aero --help`
+
+### Linux
+```bash
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.1.2/install.sh | sh
+```
+
+### Docker
+```bash
+docker run --rm -v $(pwd):/workspace aero-lang/aero:1.1.2 run hello.aero
+```
+
+### Build from Source
+```bash
+# Requirements: Rust 1.97+, LLVM 22
+cargo build --release
+./target/release/aero run examples/hello.aero
+```
+
+## Pipeline
+
+```
+Source -> Lex -> Parse -> HIR (type inference + borrow check) -> LLVM IR -> JIT / AOT executable
+```
+
+## Example
+
+```
+print("Hello from Aero!\n");
+
+fn fib(n: i64) -> i64 {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+let i = 0;
+while (i < 10) {
+    print("fib("); print(i); print(") = "); print(fib(i)); print("\n");
+    i = i + 1;
+}
+```
 
 ## Features
 
-- **Ahead-of-Time (AOT) Compilation** — Compile directly to standalone executables
-- **Generic System** — Generic functions, structs, enums, and traits with static dispatch
-- **Region-based Memory Management** — Arena allocators for controlled allocation
-- **Ownership Model** — Rust-style ownership, borrowing, and move semantics
-- **Native Tensor Operations** — Built-in tensor types with element-wise ops, matrix multiplication, and BLAS Level-1 subprograms
-- **C FFI** — Call C libraries directly via `extern "C"` declarations with `[link]` support
-- **Lightweight Static Distribution** — Self-contained Windows executable, no runtime dependencies
+| Feature | Status |
+|---------|--------|
+| AOT / JIT compilation | Stable |
+| LLVM IR codegen (inkwell) | Stable |
+| Type inference + generics | Stable |
+| Ownership + borrow checking | Stable |
+| Tensor operations + matmul | Stable |
+| C FFI (extern "C") | Stable |
+| Vec, HashMap, String, LinkedList | Stable |
+| ADTs (enum), traits, operator overloading | Stable |
+| Package manager (aero-pm) | Stable |
+| LSP server, formatter, linter | Stable |
+| Benchmark framework (aero bench) | Stable |
+| Linux x86_64 / aarch64 | New in 1.1.2 |
+| Docker image | New in 1.1.2 |
+| GitHub Action (setup-aero) | New in 1.1.2 |
 
-## Quick Start (Windows)
+## Crates
 
-1. Download the latest portable release from the [Releases page](https://github.com/SereinCin/aero-lang/releases)
-2. Extract the archive and run `install.bat` to complete installation
-3. Open a new terminal and use the `aero` command
+| Crate      | Role                                              |
+| ---------- | ------------------------------------------------- |
+| `aero-lex` | Tokenizer                                         |
+| `aero-parse` | Parser (AST)                                    |
+| `aero-hir` | Name resolution, type inference, borrow checking  |
+| `aero-ir`  | LLVM IR codegen, JIT execution, AOT compilation   |
+| `aero-pm`  | Package manager (Aero.toml, dependency graph, tests, benchmarks) |
+| `aero-cli` | CLI: `aero run/build/new/test/bench/clippy`        |
+| `aero-std` | Standard library (Option, Result, HashMap, etc.)   |
+| `aero-fmt` | Code formatter                                    |
+| `aero-clippy` | Static linter (100+ rules)                     |
+
+## Toolchain Requirements
+
+- Rust 1.97+ (edition 2024)
+- LLVM 22 (llvm-sys 221); set `LLVM_SYS_221_PREFIX` to the LLVM prefix directory
+- MinGW UCRT64 `gcc` on PATH (Windows, used as the AOT linker)
+
+## Build & Test
+
+```bash
+cargo build --release
+cargo test
+```
+
+## CLI
 
 ```
-aero run hello.aero
-aero build hello.aero
+aero run <file.aero | package-dir>    compile and execute
+aero build [file.aero | dir]          compile to a standalone executable (AOT)
+aero new <name>                       create a new package skeleton
+aero test [file.aero]                 run tests
+aero bench <file.aero>                run benchmarks
+aero fmt <file.aero>                  format code
+aero clippy <file.aero>               static analysis
 ```
-
-## Documentation
-
-Complete bilingual tutorials (Chinese and English) are maintained in a separate [documentation repository](https://github.com/SereinCin/aero-book).
-
-## VS Code Extension
-
-An offline syntax highlighting plugin is available as a `.vsix` file. Install it by dragging the file into VS Code. This plugin is not published on the VS Code Marketplace.
-
-## Repository Structure
-
-This repository contains the compiler source code, binary packages, and build scripts. All learning materials are hosted in the dedicated documentation repository.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT
