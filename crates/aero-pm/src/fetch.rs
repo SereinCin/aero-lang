@@ -21,9 +21,14 @@ use crate::graph::PmError;
 use crate::manifest::{add_path_dependency, load_manifest_from};
 use crate::semver::{Requirement, Version};
 
-/// 默认索引地址：指向 GitHub Release 的 `latest` 附件，自动跟随重定向。
-pub const DEFAULT_INDEX_URL: &str =
-    "https://github.com/SereinCin/Aero-packages/releases/latest/download/packages.json";
+/// 为指定工具链版本构造生态索引 URL：每个 Aero 版本拉取**自己那个 tag** 的
+/// `packages.json` 发布资产（`releases/download/v<version>/packages.json`），
+/// 而不是 `latest`。这样未来发布 1.3.0 后，1.2.0 用户仍只会拿到 1.2.0 的包，
+/// 不会因 `requires_aero >=1.3.0` 被全拒或误装新包。
+pub fn index_url_for(toolchain: &str) -> String {
+    let v = toolchain.trim().trim_start_matches('v');
+    format!("https://github.com/SereinCin/Aero-packages/releases/download/v{v}/packages.json")
+}
 
 /// 一个远程包条目（来自 packages.json）。
 #[derive(Debug, Clone)]
@@ -158,13 +163,24 @@ pub fn install_package(
             project_dir.display()
         )));
     }
+    // 索引地址：默认绑定当前工具链版本（v<toolchain>/packages.json），可用
+    // AERO_INDEX_URL 覆盖（镜像 / 本地测试）。
     let index_url = std::env::var("AERO_INDEX_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_INDEX_URL.to_string());
+        .unwrap_or_else(|| index_url_for(toolchain));
 
     println!("fetching index: {index_url}");
-    let entries = fetch_index(&index_url)?;
+    let entries = fetch_index(&index_url).map_err(|e| {
+        if std::env::var("AERO_INDEX_URL").is_ok() {
+            e
+        } else {
+            PmError::new(format!(
+                "{e}\nhint: 找不到 aero v{toolchain} 的生态索引（{index_url}）——\
+                 该版本的 packages 可能尚未发布，或网络无法访问该 Release 资产",
+            ))
+        }
+    })?;
     if entries.is_empty() {
         return Err(PmError::new("remote index has no packages"));
     }
