@@ -1,0 +1,100 @@
+name: android
+
+# Android cross-compilation smoke test: builds the Aero compiler on Ubuntu,
+# installs the Android NDK, then cross-compiles examples/export_demo.aero to
+# an AArch64 Android shared library (aero build --shared --target
+# aarch64-linux-android) and verifies the exported C-ABI symbols are present
+# in the resulting lib*.so. This is the M3 milestone validation — linking an
+# Android .so needs an NDK, which only CI (not a Windows dev box) provisions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/aero-ir/**"
+      - "crates/aero-cli/**"
+      - "examples/export_demo.aero"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "crates/aero-ir/**"
+      - "crates/aero-cli/**"
+      - "examples/export_demo.aero"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  android-shared:
+    name: android aarch64 shared lib
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install C toolchain + LLVM 22 (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc llvm-22 llvm-22-dev clang-22
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      # Android NDK r25+ provides the LLVM prebuilt toolchain with bionic
+      # sysroot; the aero CLI discovers it via ANDROID_NDK_HOME.
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          loglevel: info
+
+      - name: Locate NDK
+        id: ndk
+        run: |
+          if [ -n "${ANDROID_NDK_HOME}" ]; then
+            echo "ndk=${ANDROID_NDK_HOME}" >> "$GITHUB_OUTPUT"
+          elif [ -d "$ANDROID_HOME/ndk" ]; then
+            NDK=$(ls -1 "$ANDROID_HOME/ndk" | sort -V | tail -n 1)
+            echo "ndk=$ANDROID_HOME/ndk/$NDK" >> "$GITHUB_OUTPUT"
+          else
+            echo "ndk=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify llvm-config
+        run: llvm-config --version
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: android-llvm22-${{ hashFiles('crates/aero-ir/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            android-llvm22-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Cross-compile Android shared library
+        run: |
+          target/release/aero build --shared --target aarch64-linux-android --ndk "${{ steps.ndk.outputs.ndk }}" examples/export_demo.aero
+          ls -l libexport_demo.so
+
+      - name: Verify exported symbols in lib*.so
+        run: |
+          if ! llvm-nm -D --defined-only libexport_demo.so | grep -q "T add"; then
+            echo "missing export symbol 'add' in libexport_demo.so"
+            llvm-nm -D libexport_demo.so || true
+            exit 1
+          fi
+          if ! llvm-nm -D --defined-only libexport_demo.so | grep -q "T double"; then
+            echo "missing export symbol 'double' in libexport_demo.so"
+            exit 1
+          fi
+          echo "Android .so exports verified (add, double)"
+
+      - name: Verify ELF machine is AArch64
+        run: |
+          readelf -h libexport_demo.so | grep -i "Machine" | grep -qi "aarch64" && echo "ELF machine: AArch64 OK"

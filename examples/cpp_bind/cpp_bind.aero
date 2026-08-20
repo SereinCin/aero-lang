@@ -1,0 +1,28 @@
+// M6 C++ bindgen demo: `#[export]` functions become callable from C++ via
+// `aero build --cpp` (generates cpp_bind.hpp + a shared library). Includes a
+// str parameter to exercise the str -> const char* mapping.
+
+#[export]
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+#[export]
+fn double(x: f64) -> f64 {
+    return x * 2.0;
+}
+
+#[export]
+fn is_even(n: i64) -> bool {
+    if (n % 2 == 0) {
+        return true;
+    }
+    return false;
+}
+
+extern "C" fn strlen(s: str) -> i64;
+
+#[export]
+fn str_len(s: str) -> i64 {
+    return strlen(s);
+}
