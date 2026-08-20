@@ -1,2 +1,9 @@
 /target
 *.log
+# Build artifacts (aero build / examples)
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+.aero-cache/

@@ -30,6 +30,100 @@ pub fn load_manifest_from(dir: &Path) -> Result<Manifest, crate::graph::PmError>
         .map_err(|e| crate::graph::PmError::new(format!("{}:{}: {}", e.line, e.col, e.msg)))
 }
 
+/// 把一条路径依赖 `name = { path = "<rel>" }` 写入 `dir/Aero.toml` 的
+/// `[dependencies]` 表（用于 `aero install` 安装后回写）。
+///
+/// - 已存在同名依赖 → 返回错误（不重复写入）；
+/// - `[dependencies]` 不存在 → 在文件末尾追加该表；
+/// - 保留原有注释与其它表格内容不变（基于行的文本写入，不重排）。
+pub fn add_path_dependency(dir: &Path, name: &str, rel: &str) -> Result<(), crate::graph::PmError> {
+    let path = dir.join("Aero.toml");
+    if !path.is_file() {
+        return Err(crate::graph::PmError::new(format!(
+            "cannot add dependency: {} does not exist",
+            path.display()
+        )));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        crate::graph::PmError::new(format!("cannot read {}: {}", path.display(), e))
+    })?;
+
+    // 解析现有依赖，检测冲突
+    let manifest = parse_manifest(&text).map_err(|e| {
+        crate::graph::PmError::new(format!("{}:{}: {}", e.line, e.col, e.msg))
+    })?;
+    if manifest.deps.iter().any(|d| d.name == name) {
+        return Err(crate::graph::PmError::new(format!(
+            "dependency `{name}` already declared in {}",
+            path.display()
+        )));
+    }
+
+    let line = format!("{name} = {{ path = \"{rel}\" }}");
+    let lines: Vec<&str> = text.lines().collect();
+
+    // 找到 `[dependencies]` 表头的行号（0 基）。表头形如 `[dependencies]`，
+    // 不匹配 `[dependencies.xxx]` 子表。
+    let mut dep_idx: Option<usize> = None;
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.trim();
+        if t == "[dependencies]" {
+            dep_idx = Some(i);
+            break;
+        }
+    }
+
+    let mut out: String = String::new();
+    match dep_idx {
+        Some(idx) => {
+            // 在 `[dependencies]` 段内追加：找到该段结束位置（下一段表头或 EOF），
+            // 在段内最后一个非空行后插入新行。
+            let mut end = lines.len();
+            for i in (idx + 1)..lines.len() {
+                let t = lines[i].trim();
+                if t.starts_with('[') {
+                    end = i;
+                    break;
+                }
+            }
+            // 检查段内是否已有内容行（跳过空行/注释）来决定是否补空行
+            let has_content = lines[idx + 1..end]
+                .iter()
+                .any(|l| !l.trim().is_empty() && !l.trim().starts_with('#'));
+            // 在段内最后一个内容行后插入新行。注意 `end == lines.len()` 时
+            // 用 `i == end` 判定会永不成立（i 最大为 len-1），必须用 `end - 1`。
+            for (i, l) in lines.iter().enumerate() {
+                out.push_str(l);
+                out.push('\n');
+                if i == end - 1 {
+                    if has_content {
+                        out.push('\n');
+                    }
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+            }
+        }
+        None => {
+            // 末尾追加 [dependencies] 表
+            for l in &lines {
+                out.push_str(l);
+                out.push('\n');
+            }
+            if !text.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("\n[dependencies]\n");
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+
+    std::fs::write(&path, out).map_err(|e| {
+        crate::graph::PmError::new(format!("cannot write {}: {}", path.display(), e))
+    })
+}
+
 /// A parsed dependency entry.
 ///
 /// - `{ path = "..." }` / 字符串形式 → 路径依赖（`path` 有效，`version_req` 为空）；
@@ -676,5 +770,84 @@ mod tests {
         let err = parse_manifest("[package]\nname = \"a\"\nversion = \"1\"\n\n[link]\nlibs = \"user32\"\n")
             .unwrap_err();
         assert!(err.msg.contains("array"), "got: {}", err.msg);
+    }
+
+    #[test]
+    fn add_dependency_appends_new_table() {
+        let dir = std::env::temp_dir().join(format!("aero_pm_adddep_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Aero.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        add_path_dependency(&dir, "aero-base64", "deps/aero-base64").unwrap();
+        let text = std::fs::read_to_string(dir.join("Aero.toml")).unwrap();
+        assert!(text.contains("[dependencies]"), "got: {text}");
+        assert!(text.contains("aero-base64 = { path = \"deps/aero-base64\" }"), "got: {text}");
+        let m = parse_manifest(&text).unwrap();
+        assert_eq!(m.deps.len(), 1);
+        assert_eq!(m.deps[0].name, "aero-base64");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_dependency_merges_into_existing_table() {
+        let dir = std::env::temp_dir().join(format!("aero_pm_adddep2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Aero.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlibx = { path = \"../libx\" }\n\n[link]\nlibs = []\n",
+        )
+        .unwrap();
+        add_path_dependency(&dir, "aero-hex", "deps/aero-hex").unwrap();
+        let text = std::fs::read_to_string(dir.join("Aero.toml")).unwrap();
+        assert!(text.contains("aero-hex = { path = \"deps/aero-hex\" }"), "got: {text}");
+        // 原有依赖与 link 表保留
+        assert!(text.contains("libx = { path = \"../libx\" }"), "got: {text}");
+        assert!(text.contains("[link]"), "got: {text}");
+        let m = parse_manifest(&text).unwrap();
+        assert_eq!(m.deps.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_dependency_appends_into_eof_table() {
+        // `[dependencies]` 段位于文件末尾（第二次 `aero install` 的典型场景）：
+        // 插入必须命中段末，不能因 `end == lines.len()` 而丢失新行。
+        let dir = std::env::temp_dir().join(format!("aero_pm_adddep4_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Aero.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\naero-base64 = { path = \"deps/aero-base64\" }\n",
+        )
+        .unwrap();
+        add_path_dependency(&dir, "aero-hex", "deps/aero-hex").unwrap();
+        let text = std::fs::read_to_string(dir.join("Aero.toml")).unwrap();
+        assert!(
+            text.contains("aero-hex = { path = \"deps/aero-hex\" }"),
+            "got:\n{text}"
+        );
+        assert!(
+            text.contains("aero-base64 = { path = \"deps/aero-base64\" }"),
+            "got:\n{text}"
+        );
+        let m = parse_manifest(&text).unwrap();
+        assert_eq!(m.deps.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_dependency_rejects_duplicate() {
+        let dir = std::env::temp_dir().join(format!("aero_pm_adddep3_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Aero.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlibx = { path = \"../libx\" }\n",
+        )
+        .unwrap();
+        let err = add_path_dependency(&dir, "libx", "deps/libx").unwrap_err();
+        assert!(err.msg.contains("already declared"), "got: {}", err.msg);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

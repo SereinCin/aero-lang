@@ -106,11 +106,13 @@ impl<'a> Parser<'a> {
 
     // ---------- attribute / type definitions ----------
 
-    /// Attributes before a definition: `#[derive(T1, T2, ...)]` and/or
-    /// `#[export]`. Returns the derive names and whether `#[export]` is present.
-    fn parse_attributes(&mut self) -> Result<(Vec<String>, bool), ParseError> {
+    /// Attributes before a definition: `#[derive(T1, T2, ...)]`, `#[export]`
+    /// and/or `#[py_export]`. Returns the derive names, `#[export]` presence and
+    /// `#[py_export]` presence.
+    fn parse_attributes(&mut self) -> Result<(Vec<String>, bool, bool), ParseError> {
         let mut derives = Vec::new();
         let mut exported = false;
+        let mut py_export = false;
         loop {
             let hash = self
                 .advance()
@@ -133,10 +135,14 @@ impl<'a> Parser<'a> {
                 "export" => {
                     exported = true;
                 }
+                "py_export" => {
+                    exported = true;
+                    py_export = true;
+                }
                 other => {
                     return Err(ParseError {
                         msg: format!(
-                            "unsupported attribute `{other}` (supported: `#[derive(...)]`, `#[export]`)"
+                            "unsupported attribute `{other}` (supported: `#[derive(...)]`, `#[export]`, `#[py_export]`)"
                         ),
                         line: hash.line,
                         col: hash.col,
@@ -148,17 +154,19 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok((derives, exported))
+        Ok((derives, exported, py_export))
     }
 
-    /// A statement guarded by attributes: `#[derive(...)] struct/enum ...` or
-    /// `#[export] fn ...`.
+    /// A statement guarded by attributes: `#[derive(...)] struct/enum ...`,
+    /// `#[export] fn ...` or `#[py_export] fn ...`.
     fn parse_annotated_def(&mut self) -> Result<Stmt, ParseError> {
-        let (derives, exported) = self.parse_attributes()?;
+        let (derives, exported, py_export) = self.parse_attributes()?;
         match self.peek() {
             Some(t) if t.kind == TokenKind::Struct => self.parse_struct_def(&derives),
             Some(t) if t.kind == TokenKind::Enum => self.parse_enum_def(&derives),
-            Some(t) if t.kind == TokenKind::Fn => self.parse_fn_with_gpu(false, false, exported),
+            Some(t) if t.kind == TokenKind::Fn => {
+                self.parse_fn_with_gpu(false, false, exported, py_export)
+            }
             _ => Err(self.error_at_current(
                 "`#[...]` attributes must be followed by a `struct`, `enum` or `fn` definition",
             )),
@@ -785,7 +793,7 @@ impl<'a> Parser<'a> {
             });
         }
         match model {
-            "gpu" => self.parse_fn_with_gpu(true, false, false),
+            "gpu" => self.parse_fn_with_gpu(true, false, false, false),
             _ => self.parse_extern_c_fn(&start),
         }
     }
@@ -855,12 +863,13 @@ impl<'a> Parser<'a> {
             is_extern: true,
             extern_symbol,
             exported: false,
+            py_export: false,
             span,
         })
     }
 
     fn parse_fn(&mut self) -> Result<Stmt, ParseError> {
-        self.parse_fn_with_gpu(false, false, false)
+        self.parse_fn_with_gpu(false, false, false, false)
     }
 
     /// `const fn <name>(<params>) [-> <ret>] { ... }` — a function whose body may
@@ -878,7 +887,7 @@ impl<'a> Parser<'a> {
                 col,
             });
         }
-        self.parse_fn_with_gpu(false, true, false)
+        self.parse_fn_with_gpu(false, true, false, false)
     }
 
     /// `const NAME[: TYPE] = <expr>;` — a top-level constant. The value is
@@ -908,7 +917,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_fn_with_gpu(&mut self, is_gpu: bool, is_const: bool, exported: bool) -> Result<Stmt, ParseError> {
+    fn parse_fn_with_gpu(
+        &mut self,
+        is_gpu: bool,
+        is_const: bool,
+        exported: bool,
+        py_export: bool,
+    ) -> Result<Stmt, ParseError> {
         let start = self.advance().expect("already checked for `fn`");
         let name = self.expect_ident()?;
         // Named lifetime parameters: `fn foo<'a, 'b>(...)`. These appear before the
@@ -1011,6 +1026,7 @@ impl<'a> Parser<'a> {
             is_extern: false,
             extern_symbol: None,
             exported,
+            py_export,
             span,
         })
     }

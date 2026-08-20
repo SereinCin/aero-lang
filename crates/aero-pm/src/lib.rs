@@ -11,6 +11,7 @@
 
 pub mod bench;
 pub mod build;
+pub mod fetch;
 pub mod graph;
 pub mod lock;
 pub mod manifest;
@@ -20,6 +21,7 @@ pub mod test;
 
 pub use build::{build_package, build_source, run_package};
 pub use bench::{run_bench_source, BenchConfig, BenchReport, BenchResult};
+pub use fetch::{fetch_index, install_package, parse_index, IndexEntry, InstallReport};
 pub use graph::{resolve, CrateSource, PmError};
 pub use lock::{fnv_checksum, LockEntry, Lockfile, SourceKind};
 pub use manifest::{load_manifest_from, parse_manifest, Dep, Manifest, ManifestError};
