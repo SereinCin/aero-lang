@@ -161,6 +161,7 @@ struct FuncSig {
     is_const: bool,
     is_extern: bool,
     extern_symbol: Option<String>,
+    exported: bool,
     builtin: bool,
     span: Span,
 }
@@ -376,6 +377,7 @@ impl Lowerer {
                 is_const: false,
                 is_extern: false,
                 extern_symbol: None,
+                exported: false,
                 builtin: true,
                 span: dummy_span,
             });
@@ -871,6 +873,7 @@ impl Lowerer {
                         is_const: _,
                         is_extern,
                         extern_symbol: _,
+                        exported: _,
                         span: m_span,
                     } = m_stmt
                     {
@@ -965,6 +968,7 @@ impl Lowerer {
                             is_const: false,
                             is_extern: false,
                             extern_symbol: None,
+                            exported: false,
                             builtin: false,
                             span: *m_span,
                         });
@@ -982,6 +986,7 @@ impl Lowerer {
                             is_const: false,
                             is_extern: false,
                             extern_symbol: None,
+                            exported: false,
                             builtin: false,
                             body: HirBlock { stmts: Vec::new(), scope_id: 0 }, // filled in pass 2
                             span: *m_span,
@@ -1104,6 +1109,7 @@ impl Lowerer {
                 is_const,
                 is_extern,
                 extern_symbol,
+                exported,
                 span,
                 ..
             } = stmt
@@ -1225,6 +1231,38 @@ impl Lowerer {
                         *span,
                     ));
                 }
+                // `#[export]` functions become visible C-ABI symbols in a shared
+                // library, so their signature must be FFI-compatible.
+                if *exported {
+                    if *is_extern {
+                        return Err(LowerError::new(
+                            "`#[export]` cannot be combined with `extern \"C\"` (export a real function definition)",
+                            *span,
+                        ));
+                    }
+                    if !type_params.is_empty() {
+                        return Err(LowerError::new(
+                            "`#[export]` functions cannot be generic (export a monomorphic function)",
+                            *span,
+                        ));
+                    }
+                    for (pname, pty, psp) in &hir_params {
+                        if !matches!(pty, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::Ptr(_)) {
+                            return Err(LowerError::new(
+                                format!("`#[export]` parameter `{pname}` type `{pty}` is not C ABI compatible (only i32/i64/f64/bool/str/*T)"),
+                                *psp,
+                            ));
+                        }
+                    }
+                    if let Some(rt) = &ret_ty {
+                        if !matches!(rt, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::Ptr(_) | Ty::Void) {
+                            return Err(LowerError::new(
+                                format!("`#[export]` return type `{rt}` is not C ABI compatible (only i32/i64/f64/bool/str/*T/void)"),
+                                *span,
+                            ));
+                        }
+                    }
+                }
                 let def_id = lowerer.funcs.len() as DefId;
                 lowerer.func_by_name.insert(name.clone(), def_id);
                 lowerer.funcs.push(FuncSig {
@@ -1239,6 +1277,7 @@ impl Lowerer {
                     is_const: *is_const,
                     is_extern: *is_extern,
                     extern_symbol: extern_symbol.clone(),
+                    exported: *exported,
                     builtin: false,
                     span: *span,
                 });
@@ -1277,6 +1316,7 @@ impl Lowerer {
             bool,
             Option<String>,
             bool,
+            bool,
             Span,
         )> = lowerer
             .funcs
@@ -1294,13 +1334,14 @@ impl Lowerer {
                     s.is_const,
                     s.is_extern,
                     s.extern_symbol.clone(),
+                    s.exported,
                     s.builtin,
                     s.span,
                 )
             })
             .collect();
         let mut hir_funcs = Vec::new();
-        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, builtin, span) in
+        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, builtin, span) in
             sigs
         {
             lowerer.scopes.push(std::collections::HashMap::new());
@@ -1360,6 +1401,7 @@ impl Lowerer {
                 is_const,
                 is_extern,
                 extern_symbol,
+                exported,
                 builtin,
                 body,
                 span,

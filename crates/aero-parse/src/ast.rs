@@ -313,6 +313,9 @@ pub enum Stmt {
         is_extern: bool,
         /// C symbol name for `extern "C"` (`= "sym"`; defaults to the function name)
         extern_symbol: Option<String>,
+        /// Whether this function is marked `#[export]` (a visible C-ABI symbol
+        /// for dynamic-library / cross-language binding, e.g. Python or JNI)
+        exported: bool,
         span: Span,
     },
     /// `return [<expr>];`
