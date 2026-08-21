@@ -41,7 +41,7 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
     PointerValue,
 };
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use inkwell::{AddressSpace, DLLStorageClass, FloatPredicate, GlobalVisibility, IntPredicate};
 
 /// Codegen error (with line/column).
 #[derive(Debug, Clone, PartialEq)]
@@ -567,6 +567,7 @@ pub fn compile<'ctx>(
     call_types: &HashMap<usize, Vec<Ty>>,
     struct_lit_types: &HashMap<usize, Vec<Ty>>,
     enum_lit_types: &HashMap<usize, Vec<Ty>>,
+    emit_main: bool,
 ) -> Result<Module<'ctx>, CodegenError> {
     let module = context.create_module("aero");
     let builder = context.create_builder();
@@ -593,6 +594,11 @@ pub fn compile<'ctx>(
         ),
         None,
     );
+    // Shared-library builds (`.so`/`.pyd`/`.dylib`) keep the top-level statements
+    // but hide `main` from the dynamic symbol table (the library has no C entry).
+    if !emit_main {
+        main.set_linkage(inkwell::module::Linkage::Internal);
+    }
 
     // Globals written at main entry: CLI argument count and vector.
     let aero_argc = module.add_global(i32_ty, None, "aero_argc");
@@ -666,6 +672,14 @@ pub fn compile<'ctx>(
             .find(|f| f.get_name().to_str().map(|s| s == llvm_name.as_str()).unwrap_or(false))
             .copied()
             .unwrap_or_else(|| module.add_function(&llvm_name, fn_ty, None));
+        // `#[export]` functions are visible C-ABI symbols: force external
+        // visibility and mark them for DLL export (Windows COFF). On ELF/Mach-O
+        // the DLL storage class is ignored, so the symbol is exported by default.
+        if f.exported {
+            func.set_linkage(inkwell::module::Linkage::External);
+            func.as_global_value().set_visibility(GlobalVisibility::Default);
+            func.as_global_value().set_dll_storage_class(DLLStorageClass::Export);
+        }
         funcs.push(func);
     }
 

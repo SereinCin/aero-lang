@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aero-cli"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-clippy",
  "aero-fmt",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "aero-clippy"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-lex",
  "aero-parse",
@@ -23,21 +23,21 @@ dependencies = [
 
 [[package]]
 name = "aero-fmt"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-lex",
 ]
 
 [[package]]
 name = "aero-hir"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-parse",
 ]
 
 [[package]]
 name = "aero-ir"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-hir",
  "aero-lex",
@@ -48,21 +48,21 @@ dependencies = [
 
 [[package]]
 name = "aero-lex"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "aero-parse"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-lex",
 ]
 
 [[package]]
 name = "aero-pm"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-hir",
  "aero-ir",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "aero-std"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "aero-lex",
 ]

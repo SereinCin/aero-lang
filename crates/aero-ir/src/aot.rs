@@ -190,12 +190,21 @@ fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str
     Ok(())
 }
 
-/// Link an object file into an executable with the system linker.
+/// Link an object file into an executable (or shared library) with the system linker.
 ///
 /// The linker is chosen via the `AERO_LINKER` env var, defaulting to `gcc`.
 /// gcc automatically brings the CRT startup objects, default libs (UCRT) and
 /// the console subsystem, so a COFF object file containing `main` is enough.
-fn link(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &[String]) -> Result<(), AeroError> {
+/// `shared=true` adds `-shared` (dynamic-library output: `.so`/`.dll`/`.dylib`);
+/// `extra_args` are appended verbatim (used for cross-toolchains, e.g. NDK).
+fn link(
+    obj_path: &Path,
+    out_path: &Path,
+    libs: &[String],
+    lib_paths: &[String],
+    shared: bool,
+    extra_args: &[String],
+) -> Result<(), AeroError> {
     let linker = std::env::var("AERO_LINKER").unwrap_or_else(|_| "gcc".to_string());
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
         eprintln!("[aot-dbg] link: spawning `{linker}`");
@@ -208,7 +217,13 @@ fn link(obj_path: &Path, exe_path: &Path, libs: &[String], lib_paths: &[String])
     for l in libs {
         cmd.arg(format!("-l{l}"));
     }
-    cmd.arg("-o").arg(exe_path);
+    if shared {
+        cmd.arg("-shared");
+    }
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    cmd.arg("-o").arg(out_path);
     // Give the executable a large main-thread stack reserve. By default MinGW/LLD
     // links with a ~1MB stack, so deep recursion (>~50k frames) overflows and
     // aborts the whole process. Bumping this to 64MB makes high-intensity
@@ -266,7 +281,40 @@ pub fn compile_to_exe_linked(
     opt: OptLevel,
     target: &str,
 ) -> Result<(), AeroError> {
-    if let Some(parent) = exe_path.parent() {
+    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, &[])
+}
+
+/// AOT compilation to a shared library (`-shared` output: `.so`/`.dll`/`.dylib`).
+///
+/// `#[export]` functions become visible C-ABI symbols in the dynamic symbol table;
+/// the top-level `main` is kept but hidden (see [`crate::compile_pipeline_emit`]).
+/// `extra_args` are appended to the linker command (cross-toolchains, e.g. NDK).
+pub fn compile_to_shared(
+    source: &str,
+    out_path: &Path,
+    libs: &[String],
+    lib_paths: &[String],
+    opt: OptLevel,
+    target: &str,
+    extra_args: &[String],
+) -> Result<(), AeroError> {
+    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, extra_args)
+}
+
+/// Shared "IR → obj → link" pipeline used by both executable and shared-library builds.
+#[allow(clippy::too_many_arguments)]
+fn compile_to_out(
+    source: &str,
+    out_path: &Path,
+    libs: &[String],
+    lib_paths: &[String],
+    opt: OptLevel,
+    target: &str,
+    shared: bool,
+    emit_main: bool,
+    extra_args: &[String],
+) -> Result<(), AeroError> {
+    if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AeroError {
             phase: "AOT",
             line: 0,
@@ -275,7 +323,7 @@ pub fn compile_to_exe_linked(
         })?;
     }
     let context = Context::create();
-    let module = crate::compile_pipeline(&context, source)?;
+    let module = crate::compile_pipeline_emit(&context, source, emit_main)?;
     if std::env::var("AERO_DUMP_IR").is_ok() {
         let s = module.print_to_string();
         println!("{s}");
@@ -292,7 +340,7 @@ pub fn compile_to_exe_linked(
     })?;
     let _cleanup = TmpDirCleanup(tmp_dir.clone());
     let obj_path = tmp_dir.join("aero_out.obj");
-    let exe_tmp = tmp_dir.join("aero_out.exe");
+    let out_tmp = tmp_dir.join(if shared { "aero_out.lib" } else { "aero_out.exe" });
     let emit_result = emit_object(&module, &obj_path, opt, target);
     // LLVM 22.1.8 official Windows static-lib bug: after target init, Builder-built
     // module/Context disposal (LLVMDisposeModule / LLVMContextDispose) crashes
@@ -301,13 +349,13 @@ pub fn compile_to_exe_linked(
     std::mem::forget(module);
     std::mem::forget(context);
     emit_result?;
-    link(&obj_path, &exe_tmp, libs, lib_paths)?;
+    link(&obj_path, &out_tmp, libs, lib_paths, shared, extra_args)?;
     // Copy from the ASCII temp dir back to the target path (supports non-ASCII paths)
-    std::fs::copy(&exe_tmp, exe_path).map_err(|e| AeroError {
+    std::fs::copy(&out_tmp, out_path).map_err(|e| AeroError {
         phase: "AOT",
         line: 0,
         col: 0,
-        msg: format!("cannot write output file {}: {e}", exe_path.display()),
+        msg: format!("cannot write output file {}: {e}", out_path.display()),
     })?;
     Ok(())
 }

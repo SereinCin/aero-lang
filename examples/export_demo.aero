@@ -1,0 +1,23 @@
+// M0 export demo: `#[export]` functions must appear as visible C-ABI symbols
+// when this file is compiled with `aero build --shared`.
+
+#[export]
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+#[export]
+fn double(x: f64) -> f64 {
+    return x * 2.0;
+}
+
+#[export]
+fn is_even(n: i64) -> bool {
+    if (n % 2 == 0) {
+        return true;
+    }
+    return false;
+}
+
+// Top-level statements live in `main` (hidden for shared-library builds).
+print("export_demo compiled\n");

@@ -146,7 +146,7 @@ fn main() {
 
 /// `aero run <file|dir> [-O<n>] [--target <triple>]`: files take the single-file pipeline; directories (or those with Aero.toml) use the package flow.
 fn cmd_run(arg: &str) -> u8 {
-    let (path, triple, opt) = parse_build_flags(arg);
+    let (path, triple, opt, _) = parse_build_flags(arg);
     let p = Path::new(path);
     if p.is_dir() || p.join("Aero.toml").exists() {
         match aero_pm::run_package(p) {
@@ -161,15 +161,17 @@ fn cmd_run(arg: &str) -> u8 {
     }
 }
 
-/// `aero build [file.aero | dir] [-O0|-O1|-O2|-O3] [--target <triple>]`: AOT-compile to a standalone executable.
+/// `aero build [file.aero | dir] [-O0|-O1|-O2|-O3] [--target <triple>] [--shared]`:
+/// AOT-compile to a standalone executable, or a shared library with `--shared`.
 /// - Package dir: outputs to `<pkg root>/target/aero/<pkg name>.exe`;
-/// - Single file: outputs to `<file name>.exe` next to the source.
+/// - Single file: outputs to `<file name>.exe` (or `.so`/`.dll`/`.dylib` with `--shared`).
 fn cmd_build(arg: &str) -> u8 {
-    // Peel an optional `--target <triple>` and `-O<n>`.
-    let (path, triple, opt) = parse_build_flags(arg);
+    // Peel an optional `--target <triple>`, `--shared` and `-O<n>`.
+    let (path, triple, opt, shared) = parse_build_flags(arg);
     let p = Path::new(path);
     if p.is_file() {
-        let exe = p.with_extension("exe");
+        let ext = if shared { shared_ext(triple) } else { "exe" };
+        let out = p.with_extension(ext);
         let source = match std::fs::read_to_string(p) {
             Ok(s) => s,
             Err(e) => {
@@ -183,6 +185,19 @@ fn cmd_build(arg: &str) -> u8 {
                 return 1;
             }
         };
+        if shared {
+            let extra: Vec<String> = Vec::new();
+            return match aero_ir::aot::compile_to_shared(&source, &out, &[], &[], opt, triple, &extra) {
+                Ok(()) => {
+                    println!("{}", out.display());
+                    0
+                }
+                Err(e) => {
+                    eprint!("{}", diag::render_error(&source, path, &e));
+                    1
+                }
+            };
+        }
         // Fold config-affecting env into the cache key (own value with its own
         // key) so a stale exe is never reused across AERO_LTO/AERO_DUMP_IR switches.
         let env_ctx: Vec<(&str, String)> = ["AERO_LTO", "AERO_DUMP_IR", "AERO_DEBUG"]
@@ -193,13 +208,13 @@ fn cmd_build(arg: &str) -> u8 {
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
             .collect();
-        return match aero_ir::aot::compile_to_exe_cached(&source, &exe, &[], &[], opt, &env_refs, triple) {
+        return match aero_ir::aot::compile_to_exe_cached(&source, &out, &[], &[], opt, &env_refs, triple) {
             Ok(hit) => {
                 println!(
-                    "{}{}",
-                    exe.display(),
-                    if hit { " (cached)" } else { "" }
+                    "{}",
+                    out.display(),
                 );
+                let _ = hit;
                 0
             }
             Err(e) => {
@@ -207,6 +222,10 @@ fn cmd_build(arg: &str) -> u8 {
                 1
             }
         };
+    }
+    if shared {
+        eprintln!("`--shared` is only supported for single files in this version");
+        return 2;
     }
     let manifest = match aero_pm::graph::load_manifest(p) {
         Ok(m) => m,
@@ -233,12 +252,13 @@ fn cmd_build(arg: &str) -> u8 {
     }
 }
 
-/// Parse `--target <triple>` and `-O<n>` flags from a build/run argument string.
-/// Returns `(path_or_dir, triple, opt_level)`. The triple defaults to the host
-/// triple when not specified.
-fn parse_build_flags(arg: &str) -> (&str, &str, aero_ir::aot::OptLevel) {
+/// Parse `--target <triple>`, `--shared` and `-O<n>` flags from a build/run
+/// argument string. Returns `(path_or_dir, triple, opt_level, shared)`. The
+/// triple defaults to the host triple when not specified.
+fn parse_build_flags(arg: &str) -> (&str, &str, aero_ir::aot::OptLevel, bool) {
     let mut triple = aero_ir::aot::host_target_triple();
     let mut opt = aero_ir::aot::OptLevel::default();
+    let mut shared = false;
     let mut path = "";
     let toks: Vec<&str> = arg.split_whitespace().collect();
     let mut i = 0usize;
@@ -250,6 +270,7 @@ fn parse_build_flags(arg: &str) -> (&str, &str, aero_ir::aot::OptLevel) {
                     triple = toks[i];
                 }
             }
+            "--shared" => shared = true,
             "-O0" => opt = aero_ir::aot::OptLevel::O0,
             "-O1" => opt = aero_ir::aot::OptLevel::O1,
             "-O2" => opt = aero_ir::aot::OptLevel::O2,
@@ -262,7 +283,18 @@ fn parse_build_flags(arg: &str) -> (&str, &str, aero_ir::aot::OptLevel) {
         }
         i += 1;
     }
-    (path, triple, opt)
+    (path, triple, opt, shared)
+}
+
+/// Shared-library file extension (without dot) for a target triple (`dll`/`so`/`dylib`).
+fn shared_ext(triple: &str) -> &'static str {
+    if triple.contains("windows") {
+        "dll"
+    } else if triple.contains("darwin") {
+        "dylib"
+    } else {
+        "so"
+    }
 }
 
 /// `aero new <name>`: generate a package skeleton.
