@@ -47,6 +47,17 @@ pub fn compile_pipeline<'ctx>(
     context: &'ctx Context,
     source: &str,
 ) -> Result<Module<'ctx>, AeroError> {
+    compile_pipeline_emit(context, source, true)
+}
+
+/// [`compile_pipeline`] with an explicit `emit_main` flag. `emit_main=false`
+/// builds a shared-library module: the top-level `main` is kept but hidden from
+/// the dynamic symbol table (used by `aero build --shared` / Python extensions).
+pub(crate) fn compile_pipeline_emit<'ctx>(
+    context: &'ctx Context,
+    source: &str,
+    emit_main: bool,
+) -> Result<Module<'ctx>, AeroError> {
     let mut tokens = aero_std::std_tokens().to_vec();
     let user_tokens = aero_lex::lex(source).map_err(|e| AeroError {
         phase: "lexing",
@@ -82,6 +93,7 @@ pub fn compile_pipeline<'ctx>(
         &result.call_types,
         &result.struct_lit_types,
         &result.enum_lit_types,
+        emit_main,
     )
     .map_err(|e| AeroError {
         phase: "codegen",

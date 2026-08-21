@@ -272,6 +272,9 @@ pub struct HirFn {
     pub is_extern: bool,
     /// C symbol name for `extern "C"` (`= "sym"`; defaults to the function name)
     pub extern_symbol: Option<String>,
+    /// Whether this function is marked `#[export]` (a visible C-ABI symbol
+    /// for dynamic-library / cross-language binding, e.g. Python or JNI)
+    pub exported: bool,
     /// Whether this is a language builtin (assert/assert_eq; no LLVM body,
     /// special-cased in codegen)
     pub builtin: bool,
