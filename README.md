@@ -65,8 +65,7 @@ while (i < 10) {
 | LSP server, formatter, linter | Stable |
 | Benchmark framework (aero bench) | Stable |
 | Linux x86_64 / aarch64 | New in 1.1.2 |
-| Docker image | New in 1.1.2 |
-| GitHub Action (setup-aero) | New in 1.1.2 |
+| Docker image | New in 1.2.0 |
 | `aero install` (GitHub ecosystem) | New in 1.2.0 |
 
 ## Crates
