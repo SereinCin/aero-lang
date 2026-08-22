@@ -11,7 +11,7 @@ A systems programming language that aims for Python-level development speed with
 
 ### Linux
 ```bash
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.1.2/install.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_linux.sh | sh
 ```
 
 ### Docker
