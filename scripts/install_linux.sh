@@ -77,6 +77,7 @@ for rc in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
         printf '\n# Aero environment\n%s\n' "$PATH_LINE" >> "$rc"
         echo "  Added PATH entry to $rc"
     fi
+    
 done
 
 # Create a desktop launcher so Aero Terminal shows up in the app menu.
