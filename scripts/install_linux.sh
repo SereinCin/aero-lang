@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Aero 1.1.0 — Linux installer
+# Aero 1.2.0 — Linux installer
 #
 # Installs the aero compiler to ~/.aero, adds it to PATH, and creates an
 # "Aero Terminal" launcher so you can open a dedicated shell pre-loaded
@@ -39,7 +39,7 @@ fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing Aero 1.1.0 to ${PREFIX} ..."
+echo "Installing Aero 1.2.0 to ${PREFIX} ..."
 mkdir -p "${PREFIX}/bin"
 
 if [ -f "${HERE}/bin/aero" ]; then
@@ -62,7 +62,7 @@ cat > "${PREFIX}/bin/aero-term" <<'EOF'
 export AERO_HOME="$HOME/.aero"
 export PATH="$AERO_HOME/bin:$PATH"
 echo
-echo "  Aero 1.1.0 — Aero Programming Language"
+echo "  Aero 1.2.0 — Aero Programming Language"
 echo "  Type \"aero --help\" for usage."
 echo
 cd "$HOME"

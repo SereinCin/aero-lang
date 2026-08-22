@@ -81,6 +81,12 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
+          # -dev package provides the static archives llvm-sys links against
+          # (including libPolly.a); llvm.sh alone only installs the runtime.
+          sudo apt-get install -y llvm-22-dev
+          # llvm-config --libs reports Polly but llvm-22-dev does not ship the
+          # static archive; libpolly-22-dev provides libPolly.a.
+          sudo apt-get install -y libpolly-22-dev
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
       - name: Install LLVM 22 (macOS)
@@ -93,17 +99,22 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # Prebuilt LLVM 22.1.8 Windows archive (zip, not the .exe installer —
-          # the silent installer can fail on runners). Extract and point
-          # LLVM_SYS_221_PREFIX at it, same layout as the local dev setup.
-          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.zip"
-          $zip = "$env:TEMP\LLVM-22.1.8-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath C:\LLVM -Force
-          # The archive contains a single top-level folder (e.g. LLVM-22.1.8-win64).
-          $root = Get-ChildItem C:\LLVM -Directory | Select-Object -First 1
+          # Official LLVM 22.1.8 Windows archives are tar.xz (no zip); the
+          # silent .exe installer is unreliable on runners. Extract the xz
+          # archive and point LLVM_SYS_221_PREFIX at it (same layout as the
+          # local dev setup).
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz"
+          $arc = "$env:TEMP\llvm-22.1.8.tar.xz"
+          Invoke-WebRequest -Uri $url -OutFile $arc
+          tar -xf $arc -C C:\
+          # The archive contains a single top-level folder.
+          $root = Get-ChildItem C:\ -Directory | Where-Object { $_.Name -like 'clang+llvm-22.1.8*' } | Select-Object -First 1
           echo "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
           echo "LLVM_SYS_221_PREFIX=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # llvm-config --system-libs reports xml2s.lib (LLVM is built with
+          # libxml2 support) but the official archive does not ship it. Emit an
+          # empty import lib so MSVC link succeeds.
+          & "$root\bin\llvm-lib.exe" /llvmlibempty /OUT:"$root\lib\xml2s.lib" /machine:x64
 
       - name: Verify llvm-config
         run: llvm-config --version

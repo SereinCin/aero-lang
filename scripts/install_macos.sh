@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Aero 1.1.0 — macOS installer
+# Aero 1.2.0 — macOS installer
 #
 # Installs the aero compiler to ~/.aero, adds it to PATH, and creates
 # "Aero Terminal.command" — a double-clickable launcher in ~/Applications
@@ -44,7 +44,7 @@ fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Installing Aero 1.1.0 to ${PREFIX} ..."
+echo "Installing Aero 1.2.0 to ${PREFIX} ..."
 mkdir -p "${PREFIX}/bin"
 
 if [ -f "${HERE}/bin/aero" ]; then
@@ -68,7 +68,7 @@ cat > "${HOME}/Applications/Aero Terminal.command" <<'EOF'
 export AERO_HOME="$HOME/.aero"
 export PATH="$AERO_HOME/bin:$PATH"
 echo
-echo "  Aero 1.1.0 — Aero Programming Language"
+echo "  Aero 1.2.0 — Aero Programming Language"
 echo "  Type \"aero --help\" for usage."
 echo
 cd "$HOME"
