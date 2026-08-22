@@ -6,7 +6,8 @@ name: release
 # Why native builds (and not cross-compilation): aero-ir links LLVM 22
 # statically through inkwell/llvm-sys, and LLVM simply does not cross-compile
 # between Windows/macOS/Linux. So each OS builds its own copy. Apple Silicon
-# is covered by macos-14 (arm64); the x86_64 mac build uses macos-13.
+# is covered by macos-14 (arm64); the x86_64 mac build uses macos-15-intel
+# (macOS 13 Intel runners were retired in Dec 2025).
 
 on:
   push:
@@ -34,7 +35,7 @@ jobs:
             linker: gcc
             shell: sh
           - name: macos-x86_64
-            os: macos-13
+            os: macos-15-intel
             artifact: aero-${{ github.ref_name }}-macos-x86_64
             triple: x86_64-apple-darwin
             linker: clang
