@@ -169,8 +169,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path stage\bin -Force | Out-Null
-          Copy-Item target\release\aero.exe stage\bin\aero.exe
+          # aero.exe lives next to install.bat (the installer reads %~dp0aero.exe),
+          # matching the verified local package layout.
+          Copy-Item target\release\aero.exe stage\aero.exe
           Copy-Item installer\files\aero_cmd.bat, installer\files\aero_env.bat stage\bin\
+          Copy-Item installer\files\install.bat, installer\files\uninstall.bat, installer\files\update.bat, installer\files\README.txt stage\
           Copy-Item -Recurse core stage\plugins
           Compress-Archive -Path stage\* -DestinationPath ${{ matrix.artifact }}.zip
           echo "package=${{ matrix.artifact }}.zip" >> $env:GITHUB_ENV
