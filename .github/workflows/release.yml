@@ -113,8 +113,12 @@ jobs:
           echo "LLVM_SYS_221_PREFIX=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
           # llvm-config --system-libs reports xml2s.lib (LLVM is built with
           # libxml2 support) but the official archive does not ship it. Emit an
-          # empty import lib so MSVC link succeeds.
-          & "$root\bin\llvm-lib.exe" /llvmlibempty /OUT:"$root\lib\xml2s.lib" /machine:x64
+          # empty import lib so MSVC link succeeds. An archive with a single
+          # empty object (not the bare /llvmlibempty output) is required:
+          # link.exe rejects a truly empty archive with LNK1107.
+          New-Item -ItemType File -Force "$env:TEMP\stub.c" | Out-Null
+          & "$root\bin\clang.exe" -c "$env:TEMP\stub.c" -o "$env:TEMP\stub.obj"
+          & "$root\bin\llvm-lib.exe" /OUT:"$root\lib\xml2s.lib" "$env:TEMP\stub.obj" /machine:x64
 
       - name: Verify llvm-config
         run: llvm-config --version
