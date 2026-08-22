@@ -6,6 +6,8 @@
 //!   (libraries have no side effects at load time);
 //! - The root package `src/main.aero` statements are appended last (the main block);
 
+use std::path::Path;
+
 use aero_parse::ast::Stmt;
 
 use crate::graph::{resolve_with_lock, load_manifest, CrateSource, PmError};
@@ -101,12 +103,37 @@ fn collect_link_config(crates: &[CrateSource]) -> Result<(Vec<String>, Vec<Strin
             }
         }
         for p in &m.link_paths {
-            if !lib_paths.contains(p) {
-                lib_paths.push(p.clone());
+            // Relative lib_paths are resolved against the crate's own root, so a
+            // dependency installed to `deps/<name>/` can declare `lib_paths = ["shim"]`
+            // and still link correctly from any working directory.
+            let resolved = resolve_link_path(&cs.root, p);
+            if !lib_paths.contains(&resolved) {
+                lib_paths.push(resolved);
             }
         }
     }
     Ok((libs, lib_paths))
+}
+
+/// Resolve a `[link].lib_paths` entry to an absolute path. Absolute entries are
+/// passed through unchanged; relative entries are joined onto the crate root and
+/// made absolute (against the current working directory) so `gcc -L` sees a path
+/// that does not depend on where the user launched the build from.
+fn resolve_link_path(crate_root: &Path, p: &str) -> String {
+    let p_path = Path::new(p);
+    let abs = if p_path.is_absolute() {
+        p_path.to_path_buf()
+    } else {
+        let mut root = crate_root.to_path_buf();
+        if !root.is_absolute() {
+            if let Ok(cwd) = std::env::current_dir() {
+                root = cwd.join(root);
+            }
+        }
+        root.join(p_path)
+    };
+    // Normalize separators to '/' (gcc on Windows accepts forward slashes).
+    abs.to_string_lossy().replace('\\', "/")
 }
 
 /// Build the package: resolve deps -> merge -> full compile check (LLVM IR + verify), no execution.

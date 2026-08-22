@@ -1,0 +1,35 @@
+// M1 Python binding demo: `#[py_export]` functions get auto-generated CPython
+// glue (wrapper + method table + PyInit_py_bind) when compiled with
+// `aero build --pyext`. Import the module from Python and call them directly.
+
+#[py_export]
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+#[py_export]
+fn double(x: f64) -> f64 {
+    return x * 2.0;
+}
+
+#[py_export]
+fn is_even(n: i64) -> bool {
+    if (n % 2 == 0) {
+        return true;
+    }
+    return false;
+}
+
+#[py_export]
+fn greet(name: str) -> str {
+    return name;
+}
+
+#[py_export]
+fn log_message(msg: str) {
+    // void return: the wrapper returns Py_None.
+    print(msg);
+}
+
+// Top-level statements live in `main` (hidden in shared-library builds).
+print("py_bind module compiled\n");

@@ -5,7 +5,7 @@ A systems programming language that aims for Python-level development speed with
 ## Quick Start
 
 ### Windows
-1. Download `Aero-1.1.2-win64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+1. Download `Aero-1.2.0-win64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
 2. Extract to any folder, double-click `install.bat`
 3. Open a new cmd window and run `aero --help`
 
@@ -16,7 +16,7 @@ curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.1.2/instal
 
 ### Docker
 ```bash
-docker run --rm -v $(pwd):/workspace aero-lang/aero:1.1.2 run hello.aero
+docker run --rm -v $(pwd):/workspace aero-lang/aero:1.2.0 run hello.aero
 ```
 
 ### Build from Source
@@ -67,6 +67,7 @@ while (i < 10) {
 | Linux x86_64 / aarch64 | New in 1.1.2 |
 | Docker image | New in 1.1.2 |
 | GitHub Action (setup-aero) | New in 1.1.2 |
+| `aero install` (GitHub ecosystem) | New in 1.2.0 |
 
 ## Crates
 

@@ -1,6 +1,7 @@
 pub mod aot;
 pub mod codegen;
 pub mod const_eval;
+pub mod cpp;
 pub mod jit;
 
 use inkwell::context::Context;
@@ -47,16 +48,31 @@ pub fn compile_pipeline<'ctx>(
     context: &'ctx Context,
     source: &str,
 ) -> Result<Module<'ctx>, AeroError> {
-    compile_pipeline_emit(context, source, true)
+    compile_pipeline_emit(context, source, true, None)
+}
+
+/// Python-extension build spec (`aero build --pyext`): the module name plus the
+/// `PYTHON_API_VERSION` passed to `PyModule_Create2` (e.g. 1013 for CPython
+/// 3.13). The version must match the interpreter the extension links against.
+pub struct PyExtSpec<'a> {
+    pub module: &'a str,
+    pub api_version: u32,
+    /// Windows COFF target: DLL-imported data (e.g. `_Py_NoneStruct`) must be
+    /// accessed through the `__imp_` indirection slot (C `dllimport` semantics);
+    /// ELF/Mach-O use the plain symbol.
+    pub windows: bool,
 }
 
 /// [`compile_pipeline`] with an explicit `emit_main` flag. `emit_main=false`
 /// builds a shared-library module: the top-level `main` is kept but hidden from
 /// the dynamic symbol table (used by `aero build --shared` / Python extensions).
+/// `py_ext=Some(spec)` additionally emits the CPython glue for every
+/// `#[py_export]` function (`aero build --pyext`).
 pub(crate) fn compile_pipeline_emit<'ctx>(
     context: &'ctx Context,
     source: &str,
     emit_main: bool,
+    py_ext: Option<&PyExtSpec>,
 ) -> Result<Module<'ctx>, AeroError> {
     let mut tokens = aero_std::std_tokens().to_vec();
     let user_tokens = aero_lex::lex(source).map_err(|e| AeroError {
@@ -94,6 +110,7 @@ pub(crate) fn compile_pipeline_emit<'ctx>(
         &result.struct_lit_types,
         &result.enum_lit_types,
         emit_main,
+        py_ext,
     )
     .map_err(|e| AeroError {
         phase: "codegen",

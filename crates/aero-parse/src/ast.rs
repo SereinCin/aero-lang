@@ -316,6 +316,9 @@ pub enum Stmt {
         /// Whether this function is marked `#[export]` (a visible C-ABI symbol
         /// for dynamic-library / cross-language binding, e.g. Python or JNI)
         exported: bool,
+        /// Whether this function is marked `#[py_export]`: `#[export]` plus an
+        /// auto-generated CPython binding (wrapper, method table, PyInit_).
+        py_export: bool,
         span: Span,
     },
     /// `return [<expr>];`

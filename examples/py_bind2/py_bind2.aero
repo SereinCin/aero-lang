@@ -1,0 +1,42 @@
+// M2 Python binding demo: Python `bytes` <-> Aero `String` (raw byte buffer).
+// Compile with:
+//   aero build --pyext examples/py_bind2/py_bind2.aero
+// then run examples/py_bind2/test_py2.py from the directory containing
+// py_bind2.pyd.
+
+// A String is a { data, len, cap } byte buffer (embedded NUL-safe), which maps
+// directly to Python `bytes` via the glue: parameters use ParseTuple "y#"
+// (copied into a fresh buffer), returns use PyBytes_FromStringAndSize.
+
+#[py_export]
+fn bytes_len(b: String) -> i64 {
+    return b.len();
+}
+
+#[py_export]
+fn bytes_first(b: String) -> i64 {
+    if (b.len() > 0) {
+        return b.at(0);
+    }
+    return -1;
+}
+
+#[py_export]
+fn bytes_reverse(b: String) -> String {
+    let out = String::new();
+    let n = b.len();
+    let mut i = n - 1;
+    while (i >= 0) {
+        let c = b.at(i);
+        out.push(c);
+        i = i - 1;
+    }
+    return out;
+}
+
+#[py_export]
+fn bytes_echo(b: String) -> String {
+    return b;
+}
+
+print("py_bind2 module compiled\n");

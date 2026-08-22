@@ -26,6 +26,10 @@ use crate::AeroError;
 
 /// Host backend initialized once (LLVM global state).
 static INIT_TARGET: Once = Once::new();
+/// Cross-compile backends (aarch64/arm/x86) initialized once each.
+static INIT_AARCH64: Once = Once::new();
+static INIT_ARM: Once = Once::new();
+static INIT_X86: Once = Once::new();
 
 /// Optimization level for AOT native codegen. Maps to an LLVM pass pipeline
 /// (`default<O0>`–`default<O3>`) and the target machine's `OptimizationLevel`.
@@ -73,6 +77,66 @@ fn init_target() {
     });
 }
 
+/// The CPU arch component of a target triple (the leading `arch` field), used to
+/// pick the matching LLVM backend for cross-compilation. The vendor/OS/abi fields
+/// do not affect which LLVM backend is required (e.g. `aarch64-linux-android`
+/// and `aarch64-unknown-linux-gnu` both use the AArch64 backend).
+fn triple_arch(triple: &str) -> &str {
+    triple.split('-').next().unwrap_or("")
+}
+
+/// Initialize the LLVM backend required to emit/object-link a module for
+/// `triple`. The host backend is always initialized; cross targets (Android
+/// `aarch64`/`arm`/`i686`) are registered lazily and once. LLVM requires
+/// the backend to be registered before `Target::from_triple` succeeds — without
+/// this, `aero build --target aarch64-linux-android` fails with "No available
+/// targets are compatible with this triple".
+///
+/// The host arch is deliberately skipped: `initialize_native` already registered
+/// it, and re-initializing e.g. the x86 backend explicitly crashes Builder-built
+/// modules on the LLVM 22.1.8 Windows static libs (0xC0000005, see top-of-file).
+fn init_target_for(triple: &str) {
+    init_target();
+    if triple_is_host_arch(triple) {
+        return;
+    }
+    match triple_arch(triple) {
+        "aarch64" => INIT_AARCH64.call_once(|| {
+            let _ = Target::initialize_aarch64(&InitializationConfig::default());
+        }),
+        "arm" | "armv7" => INIT_ARM.call_once(|| {
+            let _ = Target::initialize_arm(&InitializationConfig::default());
+        }),
+        "i686" | "i386" | "x86_64" => INIT_X86.call_once(|| {
+            // The `x86` backend covers both x86 (i386/i686) and x86_64 targets.
+            let _ = Target::initialize_x86(&InitializationConfig::default());
+        }),
+        _ => {}
+    }
+}
+
+/// Whether `triple` targets the same CPU arch as the build host. When
+/// cross-compiling, the host CPU name/features must not be passed to the target
+/// machine (an x86_64 host CPU string is invalid for an aarch64 target), so the
+/// emitter falls back to generic ("") CPU/features for foreign archs.
+///
+/// iOS triples are always treated as cross targets even when the arch matches
+/// the host (e.g. an Apple Silicon Mac building `aarch64-apple-ios`): iOS
+/// device/simulator codegen must not inherit desktop-Mac CPU features.
+fn triple_is_host_arch(triple: &str) -> bool {
+    if triple.contains("ios") {
+        return false;
+    }
+    triple_arch(triple) == std::env::consts::ARCH
+}
+
+/// Whether `triple` targets Darwin (macOS/iOS). Darwin emits Mach-O object
+/// files, whose symbol naming, shared-library flag (`-dynamiclib`) and runtime
+/// (`libSystem`) all differ from COFF/ELF.
+fn is_macho_triple(triple: &str) -> bool {
+    triple.contains("darwin") || triple.contains("apple")
+}
+
 /// Host target triple (detected from compile-time constants).
 ///
 /// The GNU-vs-MSVC and apple-vs-Linux vendor strings matter: the object file
@@ -105,9 +169,9 @@ pub fn host_target_triple() -> &'static str {
 
 /// Write a compiled module to a COFF/ELF/Mach-O object file.
 fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str) -> Result<(), AeroError> {
-    init_target();
+    init_target_for(triple_str);
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
-        eprintln!("[aot-dbg] init_target done");
+        eprintln!("[aot-dbg] init_target_for done");
     }
     let triple = TargetTriple::create(triple_str);
     let target = Target::from_triple(&triple).map_err(|e| AeroError {
@@ -119,16 +183,43 @@ fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
         eprintln!("[aot-dbg] from_triple done");
     }
-    let cpu = TargetMachine::get_host_cpu_name();
-    let features = TargetMachine::get_host_cpu_features();
+    // Mach-O symbol naming: LLVM prepends an underscore to every exported
+    // global on Darwin. The codegen emits the Windows CRT name `_snprintf`;
+    // on Mach-O that would become `__snprintf`, but libSystem only exports
+    // `_snprintf` (the C name `snprintf` + prefix). Rename it to `snprintf` so
+    // the emitted Mach-O symbol is `_snprintf`, resolving against libSystem.
+    if is_macho_triple(triple_str) {
+        if let Some(f) = module.get_function("_snprintf") {
+            f.as_global_value().set_name("snprintf");
+        }
+    }
+    // Only pass host CPU/features when the triple targets the host arch; a foreign
+    // arch (e.g. aarch64 from an x86_64 host) has no valid host-CPU mapping, so
+    // LLVM falls back to the target's generic CPU ("") for codegen.
+    //
+    // NOTE: get_host_cpu_name/features return owned LLVMStrings whose Drop calls
+    // LLVMDisposeMessage. Dropping them on the LLVM 22.1.8 Windows static libs
+    // crashes (0xC0000005, same class as the module/context disposal bug), so they
+    // must be kept alive for the whole function and leaked, as the original code did.
+    let (cpu, features) = if triple_is_host_arch(triple_str) {
+        let host_cpu = TargetMachine::get_host_cpu_name();
+        let host_features = TargetMachine::get_host_cpu_features();
+        let cpu = host_cpu.to_string();
+        let features = host_features.to_string();
+        std::mem::forget(host_cpu);
+        std::mem::forget(host_features);
+        (cpu, features)
+    } else {
+        (String::new(), String::new())
+    };
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
         eprintln!("[aot-dbg] cpu/features done");
     }
     let tm = target
         .create_target_machine(
             &triple,
-            &cpu.to_string(),
-            &features.to_string(),
+            &cpu,
+            &features,
             opt.inkwell(),
             RelocMode::PIC,
             CodeModel::Default,
@@ -197,6 +288,11 @@ fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str
 /// the console subsystem, so a COFF object file containing `main` is enough.
 /// `shared=true` adds `-shared` (dynamic-library output: `.so`/`.dll`/`.dylib`);
 /// `extra_args` are appended verbatim (used for cross-toolchains, e.g. NDK).
+///
+/// Platform adjustments driven by `target`:
+/// - COFF (Windows): add `-Wl,--stack,67108864` (large main-thread stack reserve).
+/// - ELF (Linux/Android): the codegen emits the Windows CRT name `_snprintf`;
+///   bionic/glibc export `snprintf`, so `--defsym=_snprintf=snprintf` aliases it.
 fn link(
     obj_path: &Path,
     out_path: &Path,
@@ -204,6 +300,7 @@ fn link(
     lib_paths: &[String],
     shared: bool,
     extra_args: &[String],
+    target: &str,
 ) -> Result<(), AeroError> {
     let linker = std::env::var("AERO_LINKER").unwrap_or_else(|_| "gcc".to_string());
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
@@ -218,17 +315,35 @@ fn link(
         cmd.arg(format!("-l{l}"));
     }
     if shared {
-        cmd.arg("-shared");
+        if is_macho_triple(target) {
+            // Darwin/clang uses `-dynamiclib` for shared libraries; `-shared`
+            // is a GNU-ld flag that clang rejects on Apple platforms.
+            cmd.arg("-dynamiclib");
+        } else {
+            cmd.arg("-shared");
+        }
     }
     for a in extra_args {
         cmd.arg(a);
     }
     cmd.arg("-o").arg(out_path);
-    // Give the executable a large main-thread stack reserve. By default MinGW/LLD
-    // links with a ~1MB stack, so deep recursion (>~50k frames) overflows and
-    // aborts the whole process. Bumping this to 64MB makes high-intensity
-    // recursive code robust without changing the language semantics.
-    cmd.arg("-Wl,--stack,67108864");
+    let coff = target.contains("windows");
+    if coff {
+        // Give the executable a large main-thread stack reserve. By default MinGW/LLD
+        // links with a ~1MB stack, so deep recursion (>~50k frames) overflows and
+        // aborts the whole process. Bumping this to 64MB makes high-intensity
+        // recursive code robust without changing the language semantics.
+        cmd.arg("-Wl,--stack,67108864");
+    } else if (target.contains("linux") || target.contains("android"))
+        && !is_macho_triple(target)
+    {
+        // The string-runtime calls `_snprintf` (the Windows CRT export name). On
+        // ELF targets the symbol is `snprintf`; alias it so Android/Linux .so and
+        // executable links resolve (GNU ld / lld both support --defsym). Mach-O
+        // is excluded: `_snprintf` is renamed to `snprintf` in emit_object, so
+        // ld64/lld resolve `_snprintf` against libSystem directly.
+        cmd.arg("-Wl,--defsym=_snprintf=snprintf");
+    }
     let out = cmd
         .output()
         .map_err(|e| AeroError {
@@ -281,7 +396,7 @@ pub fn compile_to_exe_linked(
     opt: OptLevel,
     target: &str,
 ) -> Result<(), AeroError> {
-    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, &[])
+    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, &[])
 }
 
 /// AOT compilation to a shared library (`-shared` output: `.so`/`.dll`/`.dylib`).
@@ -298,7 +413,37 @@ pub fn compile_to_shared(
     target: &str,
     extra_args: &[String],
 ) -> Result<(), AeroError> {
-    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, extra_args)
+    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, None, extra_args)
+}
+
+/// AOT compilation to a Python C extension (`.pyd` on Windows / `.so` on Unix).
+///
+/// Same shared-library pipeline as [`compile_to_shared`], plus the CPython glue
+/// (wrappers + method table + `PyInit_<module>`) for every `#[py_export]`
+/// function. `spec.module` must match the output file stem (`<name>.pyd` →
+/// `PyInit_<name>`). The linker resolves the CPython API against the import
+/// library passed via `libs`/`lib_paths` (e.g. `python313.lib`).
+pub fn compile_to_pyext(
+    source: &str,
+    out_path: &Path,
+    libs: &[String],
+    lib_paths: &[String],
+    opt: OptLevel,
+    target: &str,
+    spec: &crate::PyExtSpec,
+) -> Result<(), AeroError> {
+    compile_to_out(
+        source,
+        out_path,
+        libs,
+        lib_paths,
+        opt,
+        target,
+        true,
+        false,
+        Some(spec),
+        &[],
+    )
 }
 
 /// Shared "IR → obj → link" pipeline used by both executable and shared-library builds.
@@ -312,6 +457,7 @@ fn compile_to_out(
     target: &str,
     shared: bool,
     emit_main: bool,
+    py_ext: Option<&crate::PyExtSpec>,
     extra_args: &[String],
 ) -> Result<(), AeroError> {
     if let Some(parent) = out_path.parent() {
@@ -323,7 +469,7 @@ fn compile_to_out(
         })?;
     }
     let context = Context::create();
-    let module = crate::compile_pipeline_emit(&context, source, emit_main)?;
+    let module = crate::compile_pipeline_emit(&context, source, emit_main, py_ext)?;
     if std::env::var("AERO_DUMP_IR").is_ok() {
         let s = module.print_to_string();
         println!("{s}");
@@ -340,7 +486,18 @@ fn compile_to_out(
     })?;
     let _cleanup = TmpDirCleanup(tmp_dir.clone());
     let obj_path = tmp_dir.join("aero_out.obj");
-    let out_tmp = tmp_dir.join(if shared { "aero_out.lib" } else { "aero_out.exe" });
+    // The intermediate output keeps the *final file name* so that the emitted
+    // artifact records the right identity: gcc/clang bake the `-o` file name
+    // into the output (a PE DLL's internal name, an ELF soname / Mach-O
+    // install_name). Using `aero_out.lib` here made the DLL identify itself as
+    // `aero_out.lib` even after being copied to `cpp_bind.dll`, so the loader
+    // could not find it at runtime (0xC0000135). Reuse `out_path`'s file name
+    // (the temp *directory* still keeps the link in ASCII space).
+    let out_name = out_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| if shared { "aero_out.lib" } else { "aero_out.exe" }.to_string());
+    let out_tmp = tmp_dir.join(&out_name);
     let emit_result = emit_object(&module, &obj_path, opt, target);
     // LLVM 22.1.8 official Windows static-lib bug: after target init, Builder-built
     // module/Context disposal (LLVMDisposeModule / LLVMContextDispose) crashes
@@ -349,7 +506,7 @@ fn compile_to_out(
     std::mem::forget(module);
     std::mem::forget(context);
     emit_result?;
-    link(&obj_path, &out_tmp, libs, lib_paths, shared, extra_args)?;
+    link(&obj_path, &out_tmp, libs, lib_paths, shared, extra_args, target)?;
     // Copy from the ASCII temp dir back to the target path (supports non-ASCII paths)
     std::fs::copy(&out_tmp, out_path).map_err(|e| AeroError {
         phase: "AOT",
@@ -463,5 +620,113 @@ mod tests {
         // Invalid source should error in compile_pipeline (with a phase name), not panic
         let err = crate::compile_pipeline(&context, "let x = ;").unwrap_err();
         assert!(!err.msg.is_empty());
+    }
+
+    #[test]
+    fn triple_arch_parses_android_abis() {
+        assert_eq!(triple_arch("aarch64-linux-android"), "aarch64");
+        assert_eq!(triple_arch("armv7-linux-androideabi"), "armv7");
+        assert_eq!(triple_arch("arm-linux-androideabi"), "arm");
+        assert_eq!(triple_arch("x86_64-linux-android"), "x86_64");
+        assert_eq!(triple_arch("i686-linux-android"), "i686");
+        assert_eq!(triple_arch("x86_64-pc-windows-gnu"), "x86_64");
+    }
+
+    /// Cross-compiling to an Android AArch64 target must produce an ELF object
+    /// file with the exported symbol visible — the core of `aero build --shared
+    /// --target aarch64-linux-android`. This runs the full pipeline (source →
+    /// IR → object) without needing an NDK installed (only linking requires it).
+    #[test]
+    fn emits_android_aarch64_object_with_export() {
+        let src = "#[export]\nfn add(a: i64, b: i64) -> i64 { return a + b; }\n#[export]\nfn double(x: f64) -> f64 { return x * 2.0; }\nprint(\"x\");\n";
+        let triples = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"];
+        for t in triples {
+            let context = Context::create();
+            let module = crate::compile_pipeline_emit(&context, src, false, None).expect("pipeline");
+            let tmp = std::env::temp_dir().join(format!("aero_android_{}_test.o", t.replace('-', "_")));
+            let ok = emit_object(&module, &tmp, OptLevel::O2, t);
+            assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
+            // Every Android target must yield a genuine ELF with the exports.
+            let bytes = std::fs::read(&tmp).unwrap_or_default();
+            let _ = std::fs::remove_file(&tmp);
+            assert!(
+                bytes.len() > 4 && &bytes[0..4] == b"\x7fELF",
+                "{t} object is not ELF ({} bytes)",
+                bytes.len()
+            );
+            let has_add = bytes.windows(4).any(|w| w == b"add\0" || w == b"add");
+            let has_double = bytes.windows(7).any(|w| w == b"double\0");
+            assert!(has_add, "{t}: exported symbol `add` missing from object strtab");
+            assert!(has_double, "{t}: exported symbol `double` missing from object strtab");
+            let _ = module;
+        }
+    }
+
+    /// M5: cross-compiling to an iOS target must produce a 64-bit little-endian
+    /// Mach-O object (magic `0xfeedfacf` → bytes `cf fa ed fe`) with the exported
+    /// symbol visible, and the string-runtime `_snprintf` must be renamed to
+    /// `snprintf` (Mach-O prepends `_`, so `__snprintf` would not resolve against
+    /// libSystem's `_snprintf`). No Xcode/macOS needed — only object emission.
+    #[test]
+    fn emits_ios_macho_object_with_export() {
+        let src = "#[export]\nfn add(a: i64, b: i64) -> i64 { return a + b; }\n#[export]\nfn double(x: f64) -> f64 { return x * 2.0; }\nprint(\"x\");\n";
+        let triples = [
+            "aarch64-apple-ios",
+            "x86_64-apple-ios",
+            "aarch64-apple-ios-sim",
+        ];
+        for t in triples {
+            let context = Context::create();
+            let module = crate::compile_pipeline_emit(&context, src, false, None).expect("pipeline");
+            let tmp = std::env::temp_dir().join(format!("aero_ios_{}_test.o", t.replace('-', "_")));
+            let ok = emit_object(&module, &tmp, OptLevel::O2, t);
+            assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
+            let bytes = std::fs::read(&tmp).unwrap_or_default();
+            let _ = std::fs::remove_file(&tmp);
+            // 64-bit little-endian Mach-O magic
+            assert!(
+                bytes.len() > 4 && &bytes[0..4] == b"\xcf\xfa\xed\xfe",
+                "{t} object is not 64-bit little-endian Mach-O ({} bytes)",
+                bytes.len()
+            );
+            let has_add = bytes.windows(4).any(|w| w == b"add\0");
+            let has_double = bytes.windows(7).any(|w| w == b"double\0");
+            assert!(has_add, "{t}: exported symbol `add` missing from Mach-O strtab");
+            assert!(has_double, "{t}: exported symbol `double` missing from Mach-O strtab");
+            // The runtime `_snprintf` must have been renamed to `snprintf`: the
+            // Mach-O backend prepends `_`, so the emitted symbol is `_snprintf`
+            // (matching libSystem). A double underscore (`__snprintf`, the name
+            // the Windows-CRT `_snprintf` would get) must NOT appear.
+            let has_double_underscored = bytes.windows(11).any(|w| w == b"__snprintf\0");
+            assert!(!has_double_underscored, "{t}: `_snprintf` was not renamed to `snprintf` (found `__snprintf`)");
+            let _ = module;
+        }
+    }
+
+    /// M2: a `#[py_export]` function with a `String` (bytes) parameter/return must
+    /// emit the CPython glue: the `y#` ParseTuple format unit, the
+    /// `PyBytes_FromStringAndSize` builder call, and the `PyInit_<name>` entry.
+    /// This exercises the full glue path without needing a Python install.
+    #[test]
+    fn py_export_bytes_glue_is_emitted() {
+        init_target();
+        let context = Context::create();
+        let src = "#[py_export]\nfn bytes_len(b: String) -> i64 { return b.len(); }\n#[py_export]\nfn bytes_echo(b: String) -> String { return b; }\n";
+        let spec = crate::PyExtSpec {
+            module: "pyb",
+            api_version: 1013,
+            windows: true,
+        };
+        let module = crate::compile_pipeline_emit(&context, src, false, Some(&spec)).expect("pipeline");
+        let llvm_ir = module.print_to_string();
+        let ir = llvm_ir.to_string_lossy().into_owned();
+        // Keep the LLVMString alive: dropping it calls LLVMDisposeMessage, which
+        // crashes (0xC0000005) on the LLVM 22.1.8 Windows static libs.
+        std::mem::forget(llvm_ir);
+        assert!(ir.contains("PyBytes_FromStringAndSize"), "missing PyBytes glue:\n{ir}");
+        assert!(ir.contains("PyInit_pyb"), "missing PyInit entry:\n{ir}");
+        // The "y#" ParseTuple unit is baked into the per-wrapper format strings.
+        assert!(ir.contains("y#"), "missing y# bytes format:\n{ir}");
+        let _ = module;
     }
 }

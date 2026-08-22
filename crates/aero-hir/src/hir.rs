@@ -275,6 +275,9 @@ pub struct HirFn {
     /// Whether this function is marked `#[export]` (a visible C-ABI symbol
     /// for dynamic-library / cross-language binding, e.g. Python or JNI)
     pub exported: bool,
+    /// Whether this function is marked `#[py_export]` (auto-generated CPython
+    /// binding: wrapper + method table + `PyInit_<module>`)
+    pub py_export: bool,
     /// Whether this is a language builtin (assert/assert_eq; no LLVM body,
     /// special-cased in codegen)
     pub builtin: bool,

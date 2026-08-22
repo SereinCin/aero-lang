@@ -1,0 +1,83 @@
+name: ios
+
+# iOS cross-compilation smoke test: builds the Aero compiler on macOS (GitHub
+# macOS runners ship Xcode + xcrun, so the SDK and clang are already present),
+# then cross-compiles examples/export_demo.aero to an AArch64 iOS dynamic
+# library (aero build --shared --target aarch64-apple-ios) and verifies the
+# exported C-ABI symbols appear in the resulting lib*.dylib. This is the M5
+# milestone validation — iOS toolchains only exist on macOS, so this runs in CI
+# rather than on the Windows dev box.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/aero-ir/**"
+      - "crates/aero-cli/**"
+      - "examples/export_demo.aero"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "crates/aero-ir/**"
+      - "crates/aero-cli/**"
+      - "examples/export_demo.aero"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ios-shared:
+    name: ios aarch64 dylib
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM 22 (macOS)
+        run: |
+          brew install llvm@22
+          echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Xcode SDK + llvm-config
+        run: |
+          xcrun --sdk iphoneos --show-sdk-path
+          llvm-config --version
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            target
+          key: ios-llvm22-${{ hashFiles('crates/aero-ir/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ios-llvm22-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Cross-compile iOS shared library
+        run: |
+          target/release/aero build --shared --target aarch64-apple-ios examples/export_demo.aero
+          ls -l libexport_demo.dylib
+
+      - name: Verify exported symbols in lib*.dylib
+        run: |
+          if ! nm -gU libexport_demo.dylib | grep -q "T _add"; then
+            echo "missing export symbol '_add' in libexport_demo.dylib"
+            nm -gU libexport_demo.dylib || true
+            exit 1
+          fi
+          if ! nm -gU libexport_demo.dylib | grep -q "T _double"; then
+            echo "missing export symbol '_double' in libexport_demo.dylib"
+            exit 1
+          fi
+          echo "iOS .dylib exports verified (_add, _double)"
+
+      - name: Verify Mach-O architecture is arm64
+        run: |
+          lipo -info libexport_demo.dylib | grep -q "arm64" && echo "Mach-O arch: arm64 OK"

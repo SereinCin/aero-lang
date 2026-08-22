@@ -568,6 +568,7 @@ pub fn compile<'ctx>(
     struct_lit_types: &HashMap<usize, Vec<Ty>>,
     enum_lit_types: &HashMap<usize, Vec<Ty>>,
     emit_main: bool,
+    py_ext: Option<&crate::PyExtSpec>,
 ) -> Result<Module<'ctx>, CodegenError> {
     let module = context.create_module("aero");
     let builder = context.create_builder();
@@ -973,6 +974,12 @@ pub fn compile<'ctx>(
         cg.gen_instance(inst.fn_def_id, type_args)?;
     }
 
+    // Python-extension build (`aero build --pyext`): emit the CPython glue for
+    // every `#[py_export]` function — wrappers + method table + `PyInit_<name>`.
+    if let Some(spec) = py_ext {
+        gen_python_glue(&mut cg, spec)?;
+    }
+
     // Bake the line map into the cov_lines global (build-time constant) and emit the
     // `__aero_cov_fini` body that dumps (line, count) to aero.cov.txt at exit.
     if cg.cov_mode {
@@ -1048,6 +1055,485 @@ pub fn compile<'ctx>(
     }
 
     Ok(module)
+}
+
+/// Emit the CPython C-API glue for every `#[py_export]` function in the module:
+///
+/// 1. **Wrapper** `PyObject* <f>__pywrap(PyObject*, PyObject*)` — parses `args`
+///    with `PyArg_ParseTuple`, calls the Aero function, builds the return object.
+/// 2. **Method table** — one `PyMethodDef` per export (METH_VARARGS), NULL-terminated.
+/// 3. **Module definition** `PyModuleDef` (name/methods, size -1, no slots).
+/// 4. **Entry point** `PyMODINIT_FUNC PyInit_<module>()` → `PyModule_Create`.
+///
+/// The CPython API entry points are declared as extern C symbols and resolved by
+/// the linker against the Python import library (`-lpython3xx`); no C headers or
+/// generated C source are involved. v1 locks the full CPython ABI (no limited API).
+fn gen_python_glue<'ctx>(
+    cg: &mut Codegen<'_, 'ctx>,
+    spec: &crate::PyExtSpec,
+) -> Result<(), CodegenError> {
+    let module_name = spec.module;
+    let context = cg.context;
+    let module = cg.module;
+    let i64_ty = cg.i64_ty;
+    let i32_ty = cg.i32_ty;
+    let i1_ty = cg.bool_ty;
+    let f64_ty = context.f64_type();
+    let i8_ty = context.i8_type();
+    let i8p = context.ptr_type(AddressSpace::from(0u16));
+
+    // Collect `#[py_export]` functions (non-generic, non-extern, with bodies).
+    // An empty list is fine: the module shell (PyModuleDef + PyInit_<name>)
+    // is still emitted so the extension is importable.
+    let exported: Vec<(usize, &HirFn)> = cg
+        .hir_funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.py_export && !f.builtin && f.type_params.is_empty() && !f.is_extern)
+        .collect();
+
+    // CPython C-API entry points (resolved at link time against python3xx).
+    let pyarg_parsetuple = module.add_function(
+        "PyArg_ParseTuple",
+        i32_ty.fn_type(&[i8p.into(), i8p.into()], true),
+        None,
+    );
+    let pylong_fromlonglong = module.add_function(
+        "PyLong_FromLongLong",
+        i8p.fn_type(&[i64_ty.into()], false),
+        None,
+    );
+    let pyfloat_fromdouble = module.add_function(
+        "PyFloat_FromDouble",
+        i8p.fn_type(&[f64_ty.into()], false),
+        None,
+    );
+    let pybool_fromlong = module.add_function(
+        "PyBool_FromLong",
+        i8p.fn_type(&[i64_ty.into()], false),
+        None,
+    );
+    let pyunicode_fromstring = module.add_function(
+        "PyUnicode_FromString",
+        i8p.fn_type(&[i8p.into()], false),
+        None,
+    );
+    // `PyBytes_FromStringAndSize(const char* s, Py_ssize_t n)`: builds a Python
+    // `bytes` object from a byte buffer (copies). Used by the `Vec<i64>` ↔ bytes
+    // conversion (M2): each Vec<i64> element is truncated to a byte.
+    let pybytes_fromstringandsize = module.add_function(
+        "PyBytes_FromStringAndSize",
+        i8p.fn_type(&[i8p.into(), i64_ty.into()], false),
+        None,
+    );
+    // `PyModule_Create` is a macro in modern CPython expanding to
+    // `PyModule_Create2(module, PYTHON_API_VERSION)`; the DLL exports the latter.
+    let pymodule_create2 = module.add_function(
+        "PyModule_Create2",
+        i8p.fn_type(&[i8p.into(), i32_ty.into()], false),
+        None,
+    );
+    // `Py_None` is `&_Py_NoneStruct` (a DLL-exported data symbol on Windows,
+    // a plain global elsewhere). On COFF, imported data is accessed through the
+    // `__imp_` indirection slot, exactly like C's `__declspec(dllimport)`.
+    let py_none_imp = if spec.windows {
+        Some(module.add_global(i8p, None, "__imp__Py_NoneStruct"))
+    } else {
+        None
+    };
+    let py_none_plain = if spec.windows {
+        None
+    } else {
+        Some(module.add_global(i8_ty, None, "_Py_NoneStruct"))
+    };
+
+    // C layout of `PyMethodDef { const char* ml_name; PyCFunction ml_meth;
+    // int ml_flags; const char* ml_doc; }` — the trailing pointer is 8-aligned,
+    // so LLVM's non-packed struct inserts the matching padding automatically.
+    let method_def_ty = context.struct_type(
+        &[i8p.into(), i8p.into(), i32_ty.into(), i8p.into()],
+        false,
+    );
+    // `PyModuleDef`: PyModuleDef_Base (ob_refcnt, ob_type, m_init, m_index,
+    // m_copy) + m_name, m_doc, m_size, m_methods, m_slots, m_traverse,
+    // m_clear, m_free. Note `m_copy` was added in Python 3.5 (base = 40 bytes).
+    let module_def_ty = context.struct_type(
+        &[
+            i64_ty.into(), // ob_refcnt (Py_ssize_t)
+            i8p.into(),    // ob_type (NULL)
+            i8p.into(),    // m_init (NULL)
+            i64_ty.into(), // m_index (0)
+            i8p.into(),    // m_copy (NULL)
+            i8p.into(),    // m_name
+            i8p.into(),    // m_doc
+            i64_ty.into(), // m_size (-1: global state, no subinterpreters)
+            i8p.into(),    // m_methods
+            i8p.into(),    // m_slots (NULL)
+            i8p.into(),    // m_traverse (NULL)
+            i8p.into(),    // m_clear (NULL)
+            i8p.into(),    // m_free (NULL)
+        ],
+        false,
+    );
+
+    // 1. Wrapper functions + 2. method-table entries.
+    struct WrapInfo<'ctx> {
+        wrap: FunctionValue<'ctx>,
+        name_ptr: PointerValue<'ctx>,
+    }
+    let mut wraps: Vec<WrapInfo> = Vec::new();
+    for (idx, f) in &exported {
+        let py_name = f.name.rsplit("::").next().unwrap_or(&f.name);
+        let wrap_name = format!("{py_name}__pywrap");
+        let wrap = module.add_function(
+            &wrap_name,
+            i8p.fn_type(&[i8p.into(), i8p.into()], false),
+            None,
+        );
+        let entry = context.append_basic_block(wrap, "entry");
+        cg.builder.position_at_end(entry);
+        let args_ptr = wrap.get_nth_param(1).unwrap().into_pointer_value();
+
+        // ParseTuple format string + per-parameter out-slot types. Most types
+        // produce one out-slot; `String` (bytes) uses `y#`, which writes TWO
+        // out-pointers: `(const char** buf, Py_ssize_t* len)`.
+        let mut fmt = String::new();
+        let mut slot_tys: Vec<BasicTypeEnum> = Vec::new();
+        // Per-param index range into `slot_tys`: (start, end).
+        let mut param_slots: Vec<(usize, usize)> = Vec::new();
+        for (_, ty, _) in &f.params {
+            let start = slot_tys.len();
+            match ty {
+                Ty::I64 => {
+                    fmt.push('l');
+                    slot_tys.push(i64_ty.into());
+                }
+                Ty::F64 => {
+                    fmt.push('d');
+                    slot_tys.push(f64_ty.into());
+                }
+                Ty::Bool => {
+                    fmt.push('p');
+                    slot_tys.push(i32_ty.into());
+                }
+                Ty::Str => {
+                    fmt.push('s');
+                    slot_tys.push(i8p.into());
+                }
+                Ty::String => {
+                    // Python bytes ↔ Aero String: ParseTuple "y#" yields the raw
+                    // byte buffer + its length.
+                    fmt.push('y');
+                    fmt.push('#');
+                    slot_tys.push(i8p.into());    // char** -> buffer
+                    slot_tys.push(i64_ty.into()); // Py_ssize_t* -> length
+                }
+                other => {
+                    return Err(CodegenError {
+                        msg: format!("`#[py_export]` parameter type `{other}` has no ParseTuple mapping"),
+                        line: f.span.line,
+                        col: f.span.col,
+                    });
+                }
+            }
+            param_slots.push((start, slot_tys.len()));
+        }
+        let fmt_ptr = bld(cg.builder.build_global_string_ptr(&fmt, "pyfmt"))?;
+        let mut slots = Vec::new();
+        for slot_ty in &slot_tys {
+            slots.push(bld(cg.builder.build_alloca(*slot_ty, "pyarg"))?);
+        }
+        // PyArg_ParseTuple(args, fmt, &a1, ..., &an)
+        let mut parse_args = vec![args_ptr.into(), fmt_ptr.as_pointer_value().into()];
+        for s in &slots {
+            parse_args.push((*s).into());
+        }
+        let parse_res = bld(cg.builder.build_call(pyarg_parsetuple, &parse_args, "pyparse"))?;
+        let parse_ok = parse_res
+            .try_as_basic_value()
+            .basic()
+            .expect("PyArg_ParseTuple returns int")
+            .into_int_value();
+        let ok_bb = context.append_basic_block(wrap, "ok");
+        let fail_bb = context.append_basic_block(wrap, "fail");
+        let parse_cond = bld(cg.builder.build_int_compare(
+            IntPredicate::NE,
+            parse_ok,
+            i32_ty.const_zero(),
+            "pyparse_ok",
+        ))?;
+        bld(cg.builder.build_conditional_branch(parse_cond, ok_bb, fail_bb))?;
+        // fail: PyArg_ParseTuple already set the exception; return NULL.
+        cg.builder.position_at_end(fail_bb);
+        bld(cg.builder.build_return(Some(&i8p.const_null())))?;
+        // ok: call the Aero function and build the return object.
+        cg.builder.position_at_end(ok_bb);
+        let func_llvm = cg.funcs[*idx];
+        let mut aero_args: Vec<BasicMetadataValueEnum> = Vec::new();
+        for (pi, (_, ty, _)) in f.params.iter().enumerate() {
+            let (start, _end) = param_slots[pi];
+            match ty {
+                Ty::Bool => {
+                    let v = bld(cg.builder.build_load(slot_tys[start], slots[start], "arg"))?;
+                    let t = bld(cg.builder.build_int_truncate(
+                        v.into_int_value(),
+                        i1_ty,
+                        "argb",
+                    ))?;
+                    aero_args.push(t.into());
+                }
+                Ty::String => {
+                    // bytes → String: ParseTuple "y#" wrote (buf, len) into the two
+                    // slots. Build a `{ data, len, cap }` String struct by value: copy
+                    // the bytes into a malloc'd buffer (the Aero String owns it).
+                    let buf = bld(cg.builder.build_load(slot_tys[start], slots[start], "arg_buf"))?
+                        .into_pointer_value();
+                    let len = bld(cg.builder.build_load(
+                        slot_tys[start + 1],
+                        slots[start + 1],
+                        "arg_len",
+                    ))?
+                    .into_int_value();
+                    let str_ty = context.struct_type(
+                        &[i8p.into(), i64_ty.into(), i64_ty.into()],
+                        false,
+                    );
+                    let tmp = bld(cg.builder.build_alloca(str_ty, "py_str"))?;
+                    let data = bld(cg.builder.build_call(cg.malloc, &[len.into()], "py_str_alloc"))?
+                        .try_as_basic_value()
+                        .basic()
+                        .expect("malloc returned no value")
+                        .into_pointer_value();
+                    bld(cg.builder.build_call(
+                        cg.memcpy,
+                        &[data.into(), buf.into(), len.into()],
+                        "py_str_cpy",
+                    ))?;
+                    let zero = i32_ty.const_zero();
+                    let one = i32_ty.const_int(1, false);
+                    let two = i32_ty.const_int(2, false);
+                    let d = bld(unsafe {
+                        cg.builder.build_in_bounds_gep(str_ty, tmp, &[zero, zero], "p_str_d")
+                    })?;
+                    let l = bld(unsafe {
+                        cg.builder.build_in_bounds_gep(str_ty, tmp, &[zero, one], "p_str_l")
+                    })?;
+                    let c = bld(unsafe {
+                        cg.builder.build_in_bounds_gep(str_ty, tmp, &[zero, two], "p_str_c")
+                    })?;
+                    bld(cg.builder.build_store(d, data))?;
+                    bld(cg.builder.build_store(l, len))?;
+                    bld(cg.builder.build_store(c, len))?;
+                    let sv = bld(cg.builder.build_load(str_ty, tmp, "py_str_val"))?;
+                    aero_args.push(sv.into());
+                }
+                _ => {
+                    let v = bld(cg.builder.build_load(slot_tys[start], slots[start], "arg"))?;
+                    aero_args.push(v.into());
+                }
+            }
+        }
+        let ret_val = bld(cg.builder.build_call(func_llvm, &aero_args, "pyret"))?;
+        match &f.ret {
+            Some(Ty::I64) => {
+                let v = ret_val
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("i64 return")
+                    .into_int_value();
+                let obj = bld(cg.builder.build_call(
+                    pylong_fromlonglong,
+                    &[v.into()],
+                    "pyobj",
+                ))?
+                .try_as_basic_value()
+                .basic()
+                .expect("PyLong_FromLongLong returns pointer");
+                bld(cg.builder.build_return(Some(&obj)))?;
+            }
+            Some(Ty::F64) => {
+                let v = ret_val
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("f64 return")
+                    .into_float_value();
+                let obj = bld(cg.builder.build_call(
+                    pyfloat_fromdouble,
+                    &[v.into()],
+                    "pyobj",
+                ))?
+                .try_as_basic_value()
+                .basic()
+                .expect("PyFloat_FromDouble returns pointer");
+                bld(cg.builder.build_return(Some(&obj)))?;
+            }
+            Some(Ty::Bool) => {
+                let v = ret_val
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("bool return")
+                    .into_int_value();
+                let z = bld(cg.builder.build_int_z_extend(v, i64_ty, "pybool"))?;
+                let obj = bld(cg.builder.build_call(pybool_fromlong, &[z.into()], "pyobj"))?
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("PyBool_FromLong returns pointer");
+                bld(cg.builder.build_return(Some(&obj)))?;
+            }
+            Some(Ty::Str) => {
+                let v = ret_val
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("str return")
+                    .into_pointer_value();
+                let obj = bld(cg.builder.build_call(
+                    pyunicode_fromstring,
+                    &[v.into()],
+                    "pyobj",
+                ))?
+                .try_as_basic_value()
+                .basic()
+                .expect("PyUnicode_FromString returns pointer");
+                bld(cg.builder.build_return(Some(&obj)))?;
+            }
+            Some(Ty::String) => {
+                // String (bytes) return: the Aero function returns a
+                // `{ data, len, cap }` struct by value. Extract data + len, copy
+                // them into a Python `bytes` object (PyBytes_FromStringAndSize
+                // copies), then free the transferred Aero buffer (ownership moved
+                // to the wrapper on return).
+                let sv = ret_val
+                    .try_as_basic_value()
+                    .basic()
+                    .expect("String return")
+                    .into_struct_value();
+                let data = bld(cg.builder.build_extract_value(sv, 0, "py_s_data"))?
+                    .into_pointer_value();
+                let len = bld(cg.builder.build_extract_value(sv, 1, "py_s_len"))?
+                    .into_int_value();
+                let obj = bld(cg.builder.build_call(
+                    pybytes_fromstringandsize,
+                    &[data.into(), len.into()],
+                    "pyobj",
+                ))?
+                .try_as_basic_value()
+                .basic()
+                .expect("PyBytes_FromStringAndSize returns pointer");
+                bld(cg.builder.build_call(cg.free, &[data.into()], "py_s_free"))?;
+                bld(cg.builder.build_return(Some(&obj)))?;
+            }
+            Some(Ty::Void) | None => {
+                // Void return: return the immortal `Py_None` (borrowed reference).
+                let none = if let Some(imp) = py_none_imp {
+                    bld(cg.builder.build_load(i8p, imp.as_pointer_value(), "py_none"))?
+                } else {
+                    py_none_plain.expect("plain Py_None").as_pointer_value().into()
+                };
+                bld(cg.builder.build_return(Some(&none)))?;
+            }
+            Some(other) => {
+                return Err(CodegenError {
+                    msg: format!("`#[py_export]` return type `{other}` has no conversion"),
+                    line: f.span.line,
+                    col: f.span.col,
+                });
+            }
+        }
+        // Name global for the method-table `ml_name` field.
+        let name_arr = context.const_string(py_name.as_bytes(), true);
+        let name_gv = module.add_global(
+            name_arr.get_type(),
+            None,
+            &format!("__aero_py_methname_{py_name}"),
+        );
+        name_gv.set_initializer(&name_arr);
+        wraps.push(WrapInfo {
+            wrap,
+            name_ptr: name_gv.as_pointer_value().const_cast(i8p),
+        });
+    }
+
+    // 2. Method table: one `PyMethodDef` per export, NULL-terminated.
+    let mut method_inits: Vec<inkwell::values::StructValue<'ctx>> = Vec::new();
+    for w in &wraps {
+        let wrap_i8 = w.wrap.as_global_value().as_pointer_value().const_cast(i8p);
+        let init: Vec<BasicValueEnum> = vec![
+            w.name_ptr.into(),
+            wrap_i8.into(),
+            i32_ty.const_int(1, false).into(), // METH_VARARGS
+            i8p.const_null().into(),           // ml_doc
+        ];
+        method_inits.push(method_def_ty.const_named_struct(&init));
+    }
+    // Terminator entry { NULL, NULL, 0, NULL }
+    let term: Vec<BasicValueEnum> = vec![
+        i8p.const_null().into(),
+        i8p.const_null().into(),
+        i32_ty.const_zero().into(),
+        i8p.const_null().into(),
+    ];
+    method_inits.push(method_def_ty.const_named_struct(&term));
+    let methods_gv = module.add_global(
+        method_def_ty.array_type(method_inits.len() as u32),
+        None,
+        "__aero_py_methods",
+    );
+    methods_gv.set_initializer(&method_def_ty.const_array(&method_inits));
+    let methods_ptr = methods_gv.as_pointer_value().const_cast(i8p);
+
+    // 3. PyModuleDef global.
+    let name_arr = context.const_string(module_name.as_bytes(), true);
+    let module_name_ptr = module.add_global(name_arr.get_type(), None, "__aero_py_name");
+    module_name_ptr.set_initializer(&name_arr);
+    let def_inits: Vec<BasicValueEnum> = vec![
+        i64_ty.const_int(1, false).into(),          // ob_refcnt
+        i8p.const_null().into(),                    // ob_type
+        i8p.const_null().into(),                    // m_init
+        i64_ty.const_zero().into(),                 // m_index
+        i8p.const_null().into(),                    // m_copy
+        module_name_ptr.as_pointer_value().const_cast(i8p).into(), // m_name
+        i8p.const_null().into(),                    // m_doc
+        i64_ty.const_int(u64::MAX, false).into(),   // m_size = -1
+        methods_ptr.into(),                         // m_methods
+        i8p.const_null().into(),                    // m_slots
+        i8p.const_null().into(),                    // m_traverse
+        i8p.const_null().into(),                    // m_clear
+        i8p.const_null().into(),                    // m_free
+    ];
+    let moduledef_gv = module.add_global(module_def_ty, None, "__aero_py_moduledef");
+    moduledef_gv.set_initializer(&module_def_ty.const_named_struct(&def_inits));
+    moduledef_gv.set_linkage(inkwell::module::Linkage::External);
+    moduledef_gv.set_visibility(GlobalVisibility::Default);
+    moduledef_gv.set_dll_storage_class(DLLStorageClass::Export);
+
+    // 4. PyInit_<module> entry: PyModule_Create(&moduledef). This is the symbol
+    // Python's importer looks up by GetProcAddress/dlsym, so it must be exported.
+    let init_name = format!("PyInit_{module_name}");
+    let init = module.add_function(&init_name, i8p.fn_type(&[], false), None);
+    init.as_global_value().set_visibility(GlobalVisibility::Default);
+    init.as_global_value().set_dll_storage_class(DLLStorageClass::Export);
+    let entry = context.append_basic_block(init, "entry");
+    cg.builder.position_at_end(entry);
+    let mdef_ptr = bld(cg.builder.build_pointer_cast(
+        moduledef_gv.as_pointer_value(),
+        i8p,
+        "mdef_i8",
+    ))?;
+    let ret = bld(cg.builder.build_call(
+        pymodule_create2,
+        &[
+            mdef_ptr.into(),
+            i32_ty.const_int(spec.api_version as u64, false).into(),
+        ],
+        "pymod",
+    ))?;
+    let ret = ret
+        .try_as_basic_value()
+        .basic()
+        .expect("PyModule_Create2 returns pointer");
+    bld(cg.builder.build_return(Some(&ret)))?;
+
+    Ok(())
 }
 
 /// Source span of a statement (used for coverage line attribution).
@@ -4465,13 +4951,34 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             .ok_or_else(|| self.internal_err(*span, "malloc returned no value"))?
                             .into_pointer_value();
                             let one64 = self.i64_ty.const_int(1, false);
-                            bld(self.builder.build_call(
+                            let read_n = bld(self.builder.build_call(
                                 self.fread,
                                 &[buf.into(), one64.into(), buf_size.into(), fp.into()],
                                 "fread",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "fread returned no value"))?
+                            .into_int_value();
+                            // NUL-terminate at the actual number of bytes read (fread
+                            // return value), clamped to the buffer size minus one so we
+                            // never write past the allocation. Without this, `len()`
+                            // (strlen) scans into uninitialized malloc garbage after the
+                            // file content.
+                            let cap_idx = self.i64_ty.const_int(4095, false);
+                            let is_gt = bld(self.builder.build_int_compare(
+                                IntPredicate::UGT,
+                                read_n,
+                                cap_idx,
+                                "rend_gt",
                             ))?;
-                            // NUL-terminate at buffer end (4095)
-                            let end_idx = self.i64_ty.const_int(4095, false);
+                            let end_idx = bld(self.builder.build_select(
+                                is_gt,
+                                cap_idx,
+                                read_n,
+                                "rend_idx",
+                            ))?
+                            .into_int_value();
                             let endp = bld(unsafe {
                                 self.builder.build_in_bounds_gep(
                                     self.context.i8_type(),

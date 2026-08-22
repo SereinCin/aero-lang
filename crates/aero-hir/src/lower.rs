@@ -162,6 +162,7 @@ struct FuncSig {
     is_extern: bool,
     extern_symbol: Option<String>,
     exported: bool,
+    py_export: bool,
     builtin: bool,
     span: Span,
 }
@@ -378,6 +379,7 @@ impl Lowerer {
                 is_extern: false,
                 extern_symbol: None,
                 exported: false,
+                py_export: false,
                 builtin: true,
                 span: dummy_span,
             });
@@ -874,6 +876,7 @@ impl Lowerer {
                         is_extern,
                         extern_symbol: _,
                         exported: _,
+                        py_export: _,
                         span: m_span,
                     } = m_stmt
                     {
@@ -969,6 +972,7 @@ impl Lowerer {
                             is_extern: false,
                             extern_symbol: None,
                             exported: false,
+                            py_export: false,
                             builtin: false,
                             span: *m_span,
                         });
@@ -987,6 +991,7 @@ impl Lowerer {
                             is_extern: false,
                             extern_symbol: None,
                             exported: false,
+                            py_export: false,
                             builtin: false,
                             body: HirBlock { stmts: Vec::new(), scope_id: 0 }, // filled in pass 2
                             span: *m_span,
@@ -1110,6 +1115,7 @@ impl Lowerer {
                 is_extern,
                 extern_symbol,
                 exported,
+                py_export,
                 span,
                 ..
             } = stmt
@@ -1117,6 +1123,24 @@ impl Lowerer {
                 if name == "matmul" {
                     return Err(LowerError::new(
                         "`matmul` is a builtin matrix-multiply operation and cannot be redefined",
+                        *span,
+                    ));
+                }
+                if is_reduce_name(name) {
+                    return Err(LowerError::new(
+                        format!("`{name}` is a builtin tensor-reduction operation and cannot be redefined"),
+                        *span,
+                    ));
+                }
+                if is_elem_name(name) {
+                    return Err(LowerError::new(
+                        format!("`{name}` is a builtin element-wise tensor operation and cannot be redefined"),
+                        *span,
+                    ));
+                }
+                if is_blas_name(name) {
+                    return Err(LowerError::new(
+                        format!("`{name}` is a builtin BLAS operation and cannot be redefined"),
                         *span,
                     ));
                 }
@@ -1247,17 +1271,37 @@ impl Lowerer {
                         ));
                     }
                     for (pname, pty, psp) in &hir_params {
-                        if !matches!(pty, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::Ptr(_)) {
+                        if !matches!(pty, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::String | Ty::Ptr(_)) {
                             return Err(LowerError::new(
-                                format!("`#[export]` parameter `{pname}` type `{pty}` is not C ABI compatible (only i32/i64/f64/bool/str/*T)"),
+                                format!("`#[export]` parameter `{pname}` type `{pty}` is not C ABI compatible (only i32/i64/f64/bool/str/String/*T)"),
                                 *psp,
                             ));
                         }
                     }
                     if let Some(rt) = &ret_ty {
-                        if !matches!(rt, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::Ptr(_) | Ty::Void) {
+                        if !matches!(rt, Ty::I32 | Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::String | Ty::Ptr(_) | Ty::Void) {
                             return Err(LowerError::new(
-                                format!("`#[export]` return type `{rt}` is not C ABI compatible (only i32/i64/f64/bool/str/*T/void)"),
+                                format!("`#[export]` return type `{rt}` is not C ABI compatible (only i32/i64/f64/bool/str/String/*T/void)"),
+                                *span,
+                            ));
+                        }
+                    }
+                }
+                // `#[py_export]` additionally requires CPython-convertible
+                // signatures (i64/f64/bool/str/String), which the glue layer handles.
+                if *py_export {
+                    for (pname, pty, psp) in &hir_params {
+                        if !matches!(pty, Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::String) {
+                            return Err(LowerError::new(
+                                format!("`#[py_export]` parameter `{pname}` type `{pty}` is not Python-convertible (only i64/f64/bool/str/String)"),
+                                *psp,
+                            ));
+                        }
+                    }
+                    if let Some(rt) = &ret_ty {
+                        if !matches!(rt, Ty::I64 | Ty::F64 | Ty::Bool | Ty::Str | Ty::String | Ty::Void) {
+                            return Err(LowerError::new(
+                                format!("`#[py_export]` return type `{rt}` is not Python-convertible (only i64/f64/bool/str/String/void)"),
                                 *span,
                             ));
                         }
@@ -1278,6 +1322,7 @@ impl Lowerer {
                     is_extern: *is_extern,
                     extern_symbol: extern_symbol.clone(),
                     exported: *exported,
+                    py_export: *py_export,
                     builtin: false,
                     span: *span,
                 });
@@ -1317,6 +1362,7 @@ impl Lowerer {
             Option<String>,
             bool,
             bool,
+            bool,
             Span,
         )> = lowerer
             .funcs
@@ -1335,13 +1381,14 @@ impl Lowerer {
                     s.is_extern,
                     s.extern_symbol.clone(),
                     s.exported,
+                    s.py_export,
                     s.builtin,
                     s.span,
                 )
             })
             .collect();
         let mut hir_funcs = Vec::new();
-        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, builtin, span) in
+        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, py_export, builtin, span) in
             sigs
         {
             lowerer.scopes.push(std::collections::HashMap::new());
@@ -1402,6 +1449,7 @@ impl Lowerer {
                 is_extern,
                 extern_symbol,
                 exported,
+                py_export,
                 builtin,
                 body,
                 span,
