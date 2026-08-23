@@ -14,11 +14,6 @@ A systems programming language that aims for Python-level development speed with
 curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_linux.sh | sh
 ```
 
-### Docker
-```bash
-docker run --rm -v $(pwd):/workspace aero-lang/aero:1.2.0 run hello.aero
-```
-
 ### Build from Source
 ```bash
 # Requirements: Rust 1.97+, LLVM 22
@@ -65,7 +60,6 @@ while (i < 10) {
 | LSP server, formatter, linter | Stable |
 | Benchmark framework (aero bench) | Stable |
 | Linux x86_64 / aarch64 | New in 1.1.2 |
-| Docker image | New in 1.2.0 |
 | `aero install` (GitHub ecosystem) | New in 1.2.0 |
 
 ## Crates
