@@ -13,6 +13,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)compute SHA256SUMS for (e.g. v1.2.0)"
+        required: false
+        default: "v1.2.0"
 
 permissions:
   contents: write
@@ -232,3 +237,38 @@ jobs:
           tags: |
             aero-lang/aero:${{ github.ref_name }}
             aero-lang/aero:latest
+
+  # Computes SHA256 checksums of the release assets on a GitHub runner (fast,
+  # reliable network) and publishes SHA256SUMS.txt as a release asset, so the
+  # release page always ships verifiable checksums. Runs on every tag push and
+  # on manual dispatch (pass the tag via the `tag` input) to refresh checksums
+  # without a full rebuild.
+  checksums:
+    name: checksums
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute and publish SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          VER="${TAG_INPUT:-${GITHUB_REF_NAME}}"
+          case "${VER}" in
+            v*) ;;
+            *) echo "::error::tag input must start with 'v' (got: ${VER})"; exit 1 ;;
+          esac
+          mkdir -p sums && cd sums
+          for f in \
+            "aero-${VER}-linux-x86_64.tar.gz" \
+            "aero-${VER}-macos-arm64.tar.gz" \
+            "aero-${VER}-macos-x86_64.tar.gz" \
+            "aero-${VER}-windows-x86_64.zip"; do
+            curl -fsSL -O "https://github.com/SereinCin/aero-lang/releases/download/${VER}/${f}"
+          done
+          sha256sum aero-* | tee SHA256SUMS.txt
+          gh release upload "${VER}" SHA256SUMS.txt --clobber
+          echo "SHA256SUMS.txt published to release ${VER}"
