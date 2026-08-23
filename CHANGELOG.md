@@ -19,7 +19,6 @@ All notable changes to Aero are documented in this file.
 - Package manager (`aero-pm`) now ships 51 ecosystem packages.
 - Native builds and release artifacts for Linux x86_64, macOS x86_64/arm64,
   and Windows x86_64.
-- Docker image `aero-lang/aero:1.2.0` for quick-start environments.
 - `aero install` handles multi-package installs (e.g. aero-web then aero-sqlite)
   without missing dependencies.
 
