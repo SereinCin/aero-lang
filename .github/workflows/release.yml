@@ -270,5 +270,10 @@ jobs:
             curl -fsSL -O "https://github.com/SereinCin/aero-lang/releases/download/${VER}/${f}"
           done
           sha256sum aero-* | tee SHA256SUMS.txt
-          gh release upload "${VER}" SHA256SUMS.txt --clobber
-          echo "SHA256SUMS.txt published to release ${VER}"
+          cd ..
+          # Publish the checksums plus the standalone installer scripts, so the
+          # install commands in the README / release notes always resolve.
+          gh release upload "${VER}" sums/SHA256SUMS.txt \
+            scripts/install_linux.sh scripts/install_macos.sh \
+            scripts/uninstall_linux.sh scripts/uninstall_macos.sh --clobber
+          echo "SHA256SUMS.txt and installer scripts published to release ${VER}"
