@@ -101,6 +101,12 @@ aero fmt <file.aero>                  format code
 aero clippy <file.aero>               static analysis
 ```
 
+## Supporters
+
+We're grateful to everyone who supports Aero on Aifadian.
+
+<img src="assets/supporters/ay_xy.jpg" alt="Ay_Xy" width="56" height="56" style="border-radius:50%"> **Ay_Xy** — Aifadian supporter
+
 ## License
 
 MIT
