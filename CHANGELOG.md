@@ -2,6 +2,42 @@
 
 All notable changes to Aero are documented in this file.
 
+## [1.2.1] - 2026-09-26
+
+### Fixed
+- Arena indexing with a runtime index no longer crashes the process. The
+  compiler emitted an unchecked load, so `a.get(i)` with a computed `i` died
+  with an access violation instead of reporting anything.
+- Returning a struct or tuple implicitly from the last expression of a function
+  no longer crashes codegen; the aggregate value is returned as written.
+- Allocating past the end of an arena now reports an arena out-of-bounds error.
+  It previously surfaced as "overflowed its stack", which pointed at the wrong
+  subsystem.
+- Paths containing spaces are accepted by `aero run`, `aero build` and
+  `aero check`. The driver split its argument on whitespace before parsing it.
+- `aero --version` and `aero --help` work again. Both flags were treated as
+  input file names and failed with "no such file".
+- LSP: `textDocument/publishDiagnostics` is now well-formed JSON. The message
+  was closed incorrectly, so editors discarded every diagnostics push and never
+  showed a compile error even though the server produced them.
+- Diagnostic wording: a user function shadowing a builtin, an unknown type name,
+  and a `self` used as a non-receiver now report the actual problem (D1-D3).
+- `HashMap` with a key type other than `i64` reports a readable error naming the
+  key type instead of an internal type mismatch.
+
+### Changed
+- Documentation aligned with the implementation: operator overloading requires
+  the `RHS` and `Output` type arguments (`impl Add<Vec2, Vec2> for Vec2`), and
+  `str` has no method syntax — string operations go through the free functions
+  (`len(s)`, `substr(s, a, b)`, `str_contains(h, n)`, ...).
+- Windows installer package bumped to 1.2.1: new `aero.exe`, version banners in
+  `install.bat` / `uninstall.bat` / `update.bat`, and an updated `README.txt`.
+
+### Notes
+- `aero-v1.2.1-windows-x86_64.zip` is published with this release. Linux and
+  macOS packages are not built yet; use the 1.2.0 installers until those targets
+  are rebuilt.
+
 ## [1.2.0] - 2026-08-22
 
 ### Added

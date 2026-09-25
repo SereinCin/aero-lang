@@ -332,7 +332,7 @@ fn diagnostics_for(source: &str) -> Vec<String> {
             diag.push_str(&line.to_string());
             diag.push_str(",\"character\":");
             diag.push_str(&(col + 1).to_string());
-            diag.push('}');
+            diag.push_str("}}");
             diag.push_str(",\"severity\":1");
             diag.push_str(",\"source\":\"aero\"");
             diag.push_str(",\"message\":");

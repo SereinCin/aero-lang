@@ -2,16 +2,25 @@
 
 A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
 
+Current release: **1.2.1** (2026-09-26).
+
 ## Quick Start
 
 ### Windows
-1. Download `Aero-1.2.0-win64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+1. Download `aero-v1.2.1-windows-x86_64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
 2. Extract to any folder, double-click `install.bat`
 3. Open a new cmd window and run `aero --help`
 
-### Linux
+### Linux / macOS
+Packages for 1.2.1 are not published yet; these targets have not been rebuilt
+since 1.2.0. The 1.2.0 installers still work and stay available:
+
 ```bash
+# Linux x86_64
 curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_linux.sh | sh
+
+# macOS x86_64 / arm64
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_macos.sh | sh
 ```
 
 ### Build from Source
@@ -58,6 +67,7 @@ while (i < 10) {
 | ADTs (enum), traits, operator overloading | Stable |
 | Package manager (aero-pm) | Stable |
 | LSP server, formatter, linter | Stable |
+| Editor diagnostics from the LSP server | Fixed in 1.2.1 |
 | Benchmark framework (aero bench) | Stable |
 | Linux x86_64 / aarch64 | New in 1.1.2 |
 | `aero install` (GitHub ecosystem) | New in 1.2.0 |
@@ -94,6 +104,7 @@ cargo test
 ```
 aero run <file.aero | package-dir>    compile and execute
 aero build [file.aero | dir]          compile to a standalone executable (AOT)
+aero check <file.aero>                parse, type-check and borrow-check only
 aero new <name>                       create a new package skeleton
 aero test [file.aero]                 run tests
 aero bench <file.aero>                run benchmarks

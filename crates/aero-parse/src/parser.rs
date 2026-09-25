@@ -406,6 +406,12 @@ impl<'a> Parser<'a> {
             if !self.at(&TokenKind::RParen) {
                 loop {
                     let pname = self.expect_ident()?;
+                    if pname == "self" && !self.at(&TokenKind::Colon) {
+                        return Err(self.error_at_current(
+                            "bare `self` is not a receiver in Aero; give the first parameter an \
+                             explicit type, e.g. `fn area(this: Self)`",
+                        ));
+                    }
                     self.expect_kind(&TokenKind::Colon, "colon `:`")?;
                     let pty = self.parse_type_expr()?;
                     params.push((pname, pty));
@@ -809,6 +815,12 @@ impl<'a> Parser<'a> {
         if !self.at(&TokenKind::RParen) {
             loop {
                 let pname = self.expect_ident()?;
+                if pname == "self" && !self.at(&TokenKind::Colon) {
+                    return Err(self.error_at_current(
+                        "bare `self` is not a receiver in Aero; give the first parameter an \
+                         explicit type, e.g. `fn area(this: Self)`",
+                    ));
+                }
                 self.expect_kind(&TokenKind::Colon, "colon `:`")?;
                 let pty = self.parse_type_expr()?;
                 params.push((pname, pty));
@@ -992,6 +1004,12 @@ impl<'a> Parser<'a> {
         if !self.at(&TokenKind::RParen) {
             loop {
                 let pname = self.expect_ident()?;
+                if pname == "self" && !self.at(&TokenKind::Colon) {
+                    return Err(self.error_at_current(
+                        "bare `self` is not a receiver in Aero; give the first parameter an \
+                         explicit type, e.g. `fn area(this: Self)`",
+                    ));
+                }
                 self.expect_kind(&TokenKind::Colon, "colon `:`")?;
                 let pty = self.parse_type_expr()?;
                 params.push((pname, pty));

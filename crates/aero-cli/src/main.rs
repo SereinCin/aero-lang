@@ -67,21 +67,28 @@ fn match_opt_flag(s: &str) -> Option<aero_ir::aot::OptLevel> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let code = match args.get(1).map(String::as_str) {
+        Some("--version") | Some("-V") | Some("-v") | Some("version") => {
+            println!("aero {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        Some("--help") | Some("-h") | Some("help") => {
+            println!("{USAGE}");
+            0
+        }
         Some("run") => {
-            let joined = args[2..].join(" ");
-            if joined.trim().is_empty() {
+            if args.len() > 2 {
+                cmd_run(&args[2..])
+            } else {
                 eprintln!("missing argument.\n{USAGE}");
                 2
-            } else {
-                cmd_run(&joined)
             }
         }
         Some("build") => {
-            let joined = args[2..].join(" ");
-            if joined.trim().is_empty() {
-                cmd_build(".")
+            if args.len() > 2 {
+                cmd_build(&args[2..])
             } else {
-                cmd_build(&joined)
+                let default = [".".to_string()];
+                cmd_build(&default)
             }
         }
         Some("new") => match args.get(2) {
@@ -103,21 +110,19 @@ fn main() {
             None => cmd_test_dir("tests"),
         },
         Some("bench") => {
-            let joined = args[2..].join(" ");
-            if joined.trim().is_empty() {
+            if args.len() > 2 {
+                cmd_bench(&args[2..])
+            } else {
                 eprintln!("missing file.\naero bench <file.aero> [--iterations N] [--samples N]");
                 2
-            } else {
-                cmd_bench(&joined)
             }
         }
         Some("fmt") => {
-            let joined = args[2..].join(" ");
-            if joined.trim().is_empty() {
+            if args.len() > 2 {
+                cmd_fmt(&args[2..])
+            } else {
                 eprintln!("missing file.\naero fmt <file.aero> [--check] [--width N] [--indent N]");
                 2
-            } else {
-                cmd_fmt(&joined)
             }
         }
         Some("--lsp") | Some("-lsp") | Some("lsp") => lsp::run_lsp(),
@@ -162,8 +167,8 @@ fn main() {
 }
 
 /// `aero run <file|dir> [-O<n>] [--target <triple>]`: files take the single-file pipeline; directories (or those with Aero.toml) use the package flow.
-fn cmd_run(arg: &str) -> u8 {
-    let flags = parse_build_flags(arg);
+fn cmd_run(argv: &[String]) -> u8 {
+    let flags = parse_build_flags(argv);
     let p = Path::new(flags.path);
     if p.is_dir() || p.join("Aero.toml").exists() {
         match aero_pm::run_package(p) {
@@ -183,10 +188,10 @@ fn cmd_run(arg: &str) -> u8 {
 /// Python C extension (`--pyext`, `.pyd`/`.so` with CPython glue).
 /// - Package dir: outputs to `<pkg root>/target/aero/<pkg name>.exe`;
 /// - Single file: outputs to `<file name>.exe` (or `.so`/`.dll`/`.dylib` with `--shared`).
-fn cmd_build(arg: &str) -> u8 {
+fn cmd_build(argv: &[String]) -> u8 {
     // Peel an optional `--target <triple>`, `--shared`/`--pyext`, `--py-module`
     // and `-O<n>` flags.
-    let flags = parse_build_flags(arg);
+    let flags = parse_build_flags(argv);
     let p = Path::new(flags.path);
     if p.is_file() {
         let source = match std::fs::read_to_string(p) {
@@ -295,7 +300,7 @@ struct BuildFlags<'a> {
     shared: bool,
     /// `--pyext`: build a Python C extension (`.pyd`/`.so`) with CPython glue
     pyext: bool,
-    /// `--cpp`: build a C++ binding — shared library + `<name>.hpp` header
+    /// `--cpp`: build a C++ binding - shared library + `<name>.hpp` header
     /// declaring every `#[export]` function as `extern "C"`
     cpp: bool,
     /// `--py-module <name>`: Python module name (defaults to the file stem)
@@ -311,7 +316,7 @@ struct BuildFlags<'a> {
 /// Parse `--target <triple>`, `--shared`, `--pyext`, `--py-module`,
 /// `--py-home`, `--ndk` and `-O<n>` flags from a build/run argument string.
 /// The triple defaults to the host triple when not specified.
-fn parse_build_flags(arg: &str) -> BuildFlags<'_> {
+fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
     let mut triple = aero_ir::aot::host_target_triple();
     let mut opt = aero_ir::aot::OptLevel::default();
     let mut shared = false;
@@ -321,7 +326,7 @@ fn parse_build_flags(arg: &str) -> BuildFlags<'_> {
     let mut py_home: Option<&str> = None;
     let mut ndk: Option<&str> = None;
     let mut path = "";
-    let toks: Vec<&str> = arg.split_whitespace().collect();
+    let toks: Vec<&str> = argv.iter().map(String::as_str).collect();
     let mut i = 0usize;
     while i < toks.len() {
         match toks[i] {
@@ -396,7 +401,7 @@ struct NdkEnv {
 
 /// Locate the Android NDK: `--ndk <path>` first, then `ANDROID_NDK_HOME`,
 /// then probe common install locations (`%LOCALAPPDATA%\Android\Sdk\ndk`,
-/// `~/Android/Sdk/ndk`, `C:\Android\Sdk\ndk`, …). Returns the newest NDK when a
+/// `~/Android/Sdk/ndk`, `C:\Android\Sdk\ndk`, etc. Returns the newest NDK when a
 /// directory contains multiple version folders.
 fn find_ndk(flag: Option<&str>) -> Option<NdkEnv> {
     // Candidate NDK roots: explicit flag, env, then default install dirs.
@@ -476,7 +481,7 @@ fn clang_bin_name() -> &'static str {
 }
 
 /// Map an Android target triple to the NDK clang `--target` flag (the ABI part
-/// of the triple, e.g. `aarch64-linux-android` → `aarch64-linux-android`).
+/// of the triple, e.g. `aarch64-linux-android` -> `aarch64-linux-android`).
 fn android_abi(triple: &str) -> &str {
     if triple.starts_with("armv7") {
         "armv7a-linux-androideabi"
@@ -579,7 +584,7 @@ fn find_xcode(sdk: &str) -> Option<(String, String)> {
 /// `aero build --shared --target <ios-triple> <file>`: cross-compile an Aero file
 /// whose `#[export]` functions become C-ABI symbols in a `lib<name>.dylib` for
 /// iOS, using the Xcode toolchain (xcrun + SDK sysroot). Requires macOS with
-/// Xcode installed — this is only exercisable on CI / a Mac.
+/// Xcode installed - this is only exercisable on CI / a Mac.
 fn cmd_ios_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     // Device triples (aarch64-apple-ios) use the iphoneos SDK; simulator
     // triples (*-apple-ios-sim, x86_64-apple-ios) use iphonesimulator.
@@ -630,7 +635,7 @@ fn cmd_ios_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
 /// `aero build --cpp <file>`: build a C++ binding for an Aero file. Produces a
 /// shared library (`<name>.dll`/`.so`/`.dylib`) containing every `#[export]`
 /// function as a visible C-ABI symbol, plus a `<name>.hpp` header declaring
-/// them `extern "C"` — a C++ project `#include`s the header, links the library
+/// them `extern "C"` - a C++ project `#include`s the header, links the library
 /// and calls the Aero functions directly. Android/iOS targets reuse the same
 /// cross toolchains as `--shared`.
 fn cmd_cpp(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
@@ -697,7 +702,7 @@ struct PyEnv {
 /// library.
 fn cmd_pyext(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     // Module name: --py-module, else the file stem. Must match the file name
-    // (`<name>.pyd` ↔ `PyInit_<name>` for `import <name>`).
+    // (`<name>.pyd` -> `PyInit_<name>` for `import <name>`).
     let module_name = flags
         .py_module
         .map(|s| s.to_string())
@@ -724,8 +729,11 @@ fn cmd_pyext(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
         "so"
     };
     let out = p.with_file_name(format!("{module_name}.{ext}"));
-    // PYTHON_API_VERSION = 1000 + minor (CPython modsupport.h; e.g. 3.13 → 1013).
-    let api_version = 1000 + pyenv.minor;
+    // PYTHON_API_VERSION is a stable constant in CPython's modsupport.h: 1013
+    // since 3.6 (it is NOT `1000 + minor`). Passing a wrong value makes
+    // importlib emit a "Python C API version mismatch" warning and can break
+    // the stable ABI, so it must stay 1013 for any supported CPython.
+    let api_version = 1013;
     let spec = aero_ir::PyExtSpec {
         module: &module_name,
         api_version,
@@ -984,14 +992,14 @@ fn cmd_new(name: &str) -> u8 {
 /// `aero check <file.aero | dir>`: compile-check only (parse -> type -> borrow
 /// -> LLVM IR verify), without running.
 ///
-/// - 单个 `.aero` 文件：直接检查该文件；
-/// - 包根（有 `Aero.toml` 且含 `src/main.aero`）：解析整棵依赖树后整体检查；
-/// - 库 crate（有 `Aero.toml` 但只有 `src/lib.aero`）：检查其库源文件。
+/// - Single `.aero` file: check that file directly;
+/// - Package root (has `Aero.toml` with `src/main.aero`): resolve the whole dependency tree, then check everything;
+/// - Guest crate (has `Aero.toml` with only `src/lib.aero`): check its library source.
 fn cmd_check(target: &str) -> u8 {
     let p = Path::new(target);
-    // 目录或包根：走 aero-pm 的 package 流程（解析依赖树再整体检查）
+    // Directory or package root: go through the aero-pm package flow (resolve the dependency tree, then check everything)
     if p.is_dir() || p.join("Aero.toml").exists() {
-        // 纯库 crate（无 src/main.aero）：检查 src/lib.aero
+        // Pure library crate (no src/main.aero): check src/lib.aero
         if !p.join("src").join("main.aero").exists() {
             let lib = p.join("src").join("lib.aero");
             if lib.is_file() {
@@ -1012,7 +1020,7 @@ fn cmd_check(target: &str) -> u8 {
     check_file(p)
 }
 
-/// 检查单个 `.aero` 源文件（编译检查，不执行）。
+/// Check a single `.aero` source file (compile check only, no execution).
 fn check_file(p: &Path) -> u8 {
     let target = p.to_string_lossy();
     let source = match std::fs::read_to_string(p) {
@@ -1069,10 +1077,10 @@ fn cmd_test_file(file: &str) -> u8 {
 ///
 /// Run every `bench_` function in the file. Each case is AOT-compiled once,
 /// then executed `samples` times; the fastest run is reported as ns/op and op/s.
-fn cmd_bench(arg: &str) -> u8 {
+fn cmd_bench(argv: &[String]) -> u8 {
     let mut file: Option<String> = None;
     let mut cfg = aero_pm::BenchConfig::default();
-    let toks: Vec<&str> = arg.split_whitespace().collect();
+    let toks: Vec<&str> = argv.iter().map(String::as_str).collect();
     let mut i = 0usize;
     let mut opt_err: Option<&str> = None;
     while i < toks.len() {
@@ -1226,8 +1234,8 @@ fn run_file(path: &str, opt: aero_ir::aot::OptLevel, _target: &str) -> u8 {
 /// Format a source file in place (default), or with `--check` just verify it is
 /// already formatted. `--width` sets the max line width and `--indent` the
 /// spaces per block level (rustfmt-style knobs).
-fn cmd_fmt(arg: &str) -> u8 {
-    let (check, file, opts, err) = parse_fmt_args(arg);
+fn cmd_fmt(argv: &[String]) -> u8 {
+    let (check, file, opts, err) = parse_fmt_args(argv);
     if let Some(e) = err {
         eprintln!("{file}: {e}");
         return 1;
@@ -1266,11 +1274,11 @@ fn cmd_fmt(arg: &str) -> u8 {
 /// Split `aero fmt` arguments into `(check, path, options, error)`. The first
 /// non-option word is the file path; `--width`/`--indent` configure the
 /// formatter. Returns `(_, _, _, Some(msg))` on bad option values.
-fn parse_fmt_args(arg: &str) -> (bool, String, aero_fmt::FmtOptions, Option<String>) {
+fn parse_fmt_args(argv: &[String]) -> (bool, String, aero_fmt::FmtOptions, Option<String>) {
     let mut check = false;
     let mut opts = aero_fmt::FmtOptions::default();
     let mut path = String::new();
-    let toks: Vec<&str> = arg.split_whitespace().collect();
+    let toks: Vec<&str> = argv.iter().map(String::as_str).collect();
     let mut i = 0usize;
     while i < toks.len() {
         match toks[i] {
@@ -1486,7 +1494,7 @@ fn cmd_lock(dir: Option<&str>) -> u8 {
                 Ok(()) => {
                     let file = dir.join("Aero.lock");
                     println!(
-                        "locked {} package(s) → {}",
+                        "locked {} package(s) -> {}",
                         res.lock.entries.len(),
                         file.display()
                     );
@@ -1528,7 +1536,7 @@ fn cmd_publish(dir: &str) -> u8 {
     let reg = aero_pm::Registry::locate();
     match reg.publish(Path::new(dir)) {
         Ok(c) => {
-            println!("published {}@{} → {}", c.name, c.version, reg.root().display());
+            println!("published {}@{} -> {}", c.name, c.version, reg.root().display());
             0
         }
         Err(e) => {
