@@ -110,6 +110,10 @@ pub struct Lowerer {
     unions: Vec<HirUnionDef>,
     /// Union name → index into `unions`
     union_by_name: std::collections::HashMap<String, usize>,
+    /// Every top-level nominal type declaration, name -> (kind, span). Filled
+    /// in a pre-pass and used only by diagnostics, so an unresolved type name
+    /// can be told apart from a name that exists but is not visible yet.
+    nominal_decls: std::collections::HashMap<String, (String, Span)>,
     /// Const definitions (collected in pass 1, Phase P0-3)
     consts: Vec<HirConstDef>,
     /// Const name → index into `consts`
@@ -328,6 +332,7 @@ impl Lowerer {
             enum_by_name: std::collections::HashMap::new(),
             unions: Vec::new(),
             union_by_name: std::collections::HashMap::new(),
+            nominal_decls: std::collections::HashMap::new(),
             consts: Vec::new(),
             const_by_name: std::collections::HashMap::new(),
             traits: Vec::new(),
@@ -352,6 +357,29 @@ impl Lowerer {
             lowerer.uses.entry(mod_path).or_default().push(path);
         }
         let program = Program { stmts: flat_stmts };
+        // Pre-pass: remember where every nominal type is declared. Struct
+        // bodies are lowered before enums and unions, so a type can be
+        // perfectly well declared and still unresolved at a given position.
+        for stmt in &program.stmts {
+            match stmt {
+                Stmt::StructDef { name, span, .. } => {
+                    lowerer
+                        .nominal_decls
+                        .insert(name.clone(), ("struct".to_string(), *span));
+                }
+                Stmt::EnumDef { name, span, .. } => {
+                    lowerer
+                        .nominal_decls
+                        .insert(name.clone(), ("enum".to_string(), *span));
+                }
+                Stmt::UnionDef { name, span, .. } => {
+                    lowerer
+                        .nominal_decls
+                        .insert(name.clone(), ("union".to_string(), *span));
+                }
+                _ => {}
+            }
+        }
         // Pass 1: register language builtins first (assert/assert_eq, no body)
         let dummy_span = Span {
             line: 0,
@@ -1145,7 +1173,24 @@ impl Lowerer {
                     ));
                 }
                 
-                if lowerer.func_by_name.contains_key(name) {
+                if let Some(&prev) = lowerer.func_by_name.get(name) {
+                    // Builtins are registered before user code, so this branch
+                    // also catches attempts to redefine `read_file` and friends.
+                    let is_builtin = lowerer
+                        .funcs
+                        .get(prev as usize)
+                        .map(|f| f.builtin)
+                        .unwrap_or(false);
+                    if is_builtin {
+                        return Err(LowerError::new(
+                            format!(
+                                "`{name}` is a builtin function and cannot be redefined; \
+                                 rename yours (for example `my_{name}`) or call the \
+                                 builtin directly"
+                            ),
+                            *span,
+                        ));
+                    }
                     return Err(LowerError::new(
                         format!("duplicate definition of function `{name}`"),
                         *span,
@@ -1522,7 +1567,8 @@ impl Lowerer {
                             // Named enum type
                             Ok(Ty::Enum(resolved))
                         } else {
-                            Err(LowerError::new(format!("unknown type `{name}`"), *span))
+                            let msg = self.unknown_type_msg(name, *span);
+                            Err(LowerError::new(msg, *span))
                         }
                     }
                 }
@@ -2619,6 +2665,30 @@ impl Lowerer {
 
     /// Candidate names to try when resolving a bare `name` from within the
     /// current module, in priority order: qualified same-module name, the bare
+    /// Explain an unresolved type name. A bare "unknown type" is misleading
+    /// when the name *is* declared: 1.2.x lowers struct bodies before enums and
+    /// unions, so a type that exists can still be invisible at this position.
+    fn unknown_type_msg(&self, name: &str, span: Span) -> String {
+        for cand in self.name_candidates(name) {
+            if let Some((kind, decl)) = self.nominal_decls.get(&cand) {
+                if decl.line > span.line {
+                    return format!(
+                        "unknown type `{name}`: `{name}` is declared at line {}, after \
+                         this use; 1.2.x needs nominal types declared before use",
+                        decl.line
+                    );
+                }
+                return format!(
+                    "unknown type `{name}`: `{name}` is declared as `{kind}` at line {}; \
+                     1.2.x lowers struct fields before enums and unions, so it is not \
+                     visible here",
+                    decl.line
+                );
+            }
+        }
+        format!("unknown type `{name}`")
+    }
+
     /// name itself, then any `use`-imported alias whose last segment matches.
     fn name_candidates(&self, name: &str) -> Vec<String> {
         let mut v = Vec::new();

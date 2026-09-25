@@ -94,7 +94,7 @@ impl<'ctx> GenValue<'ctx> {
 }
 
 /// Builds the self-contained UTF-8 String helpers as module functions
-/// (stdlib Phase 1, "字符串 2.0"). They operate on a NUL-terminated byte buffer
+/// (stdlib Phase 1, "String 2.0"). They operate on a NUL-terminated byte buffer
 /// plus its length and never touch the String struct layout, so both the JIT
 /// and AOT link cleanly with no extra runtime symbols.
 ///
@@ -167,7 +167,7 @@ fn build_utf8_helpers<'ctx>(
         b.build_return(Some(&res)).unwrap();
     }
 
-    // ---- Neu空 aero_utf8_decode(data: i8*, i: i64, len: i64) -> i64 ----
+    // ---- aero_utf8_decode(data: i8*, i: i64, len: i64) -> i64 ----
     // Decodes the code point at `data[i]` (assumed a valid char start). Returns -1
     // if truncated or invalid.
     let decode_fn = module.add_function(
@@ -776,7 +776,7 @@ pub fn compile<'ctx>(
     let getenv = declared("getenv", i8_ptr_ty.fn_type(&[i8_ptr_ty.into()], false));
     let putenv = declared("_putenv_s", i32_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into()], false));
 
-    // UTF-8 String helpers (stdlib Phase 1, "字符串 2.0"): build self-contained
+    // UTF-8 String helpers (stdlib Phase 1, "String 2.0"): build self-contained
     // module functions so both JIT and AOT link cleanly (no extra runtime symbols).
     let (utf8_len_f, utf8_at_f, utf8_push_f, utf8_pop_f) =
         build_utf8_helpers(&module, context, i8_ptr_ty, i64_ty);
@@ -805,7 +805,7 @@ pub fn compile<'ctx>(
     // DISubprograms + per-statement DILocation positions. The module-wide metadata
     // emitted here is lowered to DWARF for ELF objects and to PDB for COFF (Windows)
     // at object-emission time, so a single frontend implementation drives both formats.
-    // Empty sysroot/sdk (LLVM 22 signature) — this toolchain has no SDK root.
+    // Empty sysroot/sdk (LLVM 22 signature) - this toolchain has no SDK root.
     let debug_mode = std::env::var("AERO_DEBUG").map(|v| v == "1").unwrap_or(false);
     let dbg_di = if debug_mode {
         module.add_basic_value_flag(
@@ -975,7 +975,7 @@ pub fn compile<'ctx>(
     }
 
     // Python-extension build (`aero build --pyext`): emit the CPython glue for
-    // every `#[py_export]` function — wrappers + method table + `PyInit_<name>`.
+    // every `#[py_export]` function - wrappers + method table + `PyInit_<name>`.
     if let Some(spec) = py_ext {
         gen_python_glue(&mut cg, spec)?;
     }
@@ -1059,11 +1059,11 @@ pub fn compile<'ctx>(
 
 /// Emit the CPython C-API glue for every `#[py_export]` function in the module:
 ///
-/// 1. **Wrapper** `PyObject* <f>__pywrap(PyObject*, PyObject*)` — parses `args`
+/// 1. **Wrapper** `PyObject* <f>__pywrap(PyObject*, PyObject*)` - parses `args`
 ///    with `PyArg_ParseTuple`, calls the Aero function, builds the return object.
-/// 2. **Method table** — one `PyMethodDef` per export (METH_VARARGS), NULL-terminated.
+/// 2. **Method table** - one `PyMethodDef` per export (METH_VARARGS), NULL-terminated.
 /// 3. **Module definition** `PyModuleDef` (name/methods, size -1, no slots).
-/// 4. **Entry point** `PyMODINIT_FUNC PyInit_<module>()` → `PyModule_Create`.
+/// 4. **Entry point** `PyMODINIT_FUNC PyInit_<module>()` -> `PyModule_Create`.
 ///
 /// The CPython API entry points are declared as extern C symbols and resolved by
 /// the linker against the Python import library (`-lpython3xx`); no C headers or
@@ -1093,8 +1093,16 @@ fn gen_python_glue<'ctx>(
         .collect();
 
     // CPython C-API entry points (resolved at link time against python3xx).
+    // `_PyArg_ParseTuple_SizeT` is the exported symbol that treats `#` length
+    // out-params as `Py_ssize_t*`. (In modsupport.h, `PY_SSIZE_T_CLEAN` maps
+    // `PyArg_ParseTuple` -> `_PyArg_ParseTuple_SizeT`; only the underscored
+    // symbol is actually exported by python3xx.dll, so we bind it directly.)
+    // The plain `PyArg_ParseTuple` symbol expects callers to be compiled with
+    // `PY_SSIZE_T_CLEAN` (via the header macro) and raises
+    // "PY_SSIZE_T_CLEAN macro must be defined for '#' formats" when called
+    // directly for `y#`/`s#` units, so we always bind the SizeT form.
     let pyarg_parsetuple = module.add_function(
-        "PyArg_ParseTuple",
+        "_PyArg_ParseTuple_SizeT",
         i32_ty.fn_type(&[i8p.into(), i8p.into()], true),
         None,
     );
@@ -1119,7 +1127,7 @@ fn gen_python_glue<'ctx>(
         None,
     );
     // `PyBytes_FromStringAndSize(const char* s, Py_ssize_t n)`: builds a Python
-    // `bytes` object from a byte buffer (copies). Used by the `Vec<i64>` ↔ bytes
+    // `bytes` object from a byte buffer (copies). Used by the `Vec<i64>` -> bytes
     // conversion (M2): each Vec<i64> element is truncated to a byte.
     let pybytes_fromstringandsize = module.add_function(
         "PyBytes_FromStringAndSize",
@@ -1148,7 +1156,7 @@ fn gen_python_glue<'ctx>(
     };
 
     // C layout of `PyMethodDef { const char* ml_name; PyCFunction ml_meth;
-    // int ml_flags; const char* ml_doc; }` — the trailing pointer is 8-aligned,
+    // int ml_flags; const char* ml_doc; }` - the trailing pointer is 8-aligned,
     // so LLVM's non-packed struct inserts the matching padding automatically.
     let method_def_ty = context.struct_type(
         &[i8p.into(), i8p.into(), i32_ty.into(), i8p.into()],
@@ -1205,7 +1213,10 @@ fn gen_python_glue<'ctx>(
             let start = slot_tys.len();
             match ty {
                 Ty::I64 => {
-                    fmt.push('l');
+                    // `L` = long long (always 64-bit). Windows' C `long` is 32-bit,
+                    // so `l` would only write 4 bytes into our 8-byte i64 slot and
+                    // the upper half stays garbage.
+                    fmt.push('L');
                     slot_tys.push(i64_ty.into());
                 }
                 Ty::F64 => {
@@ -1221,7 +1232,7 @@ fn gen_python_glue<'ctx>(
                     slot_tys.push(i8p.into());
                 }
                 Ty::String => {
-                    // Python bytes ↔ Aero String: ParseTuple "y#" yields the raw
+                    // Python bytes -> Aero String: ParseTuple "y#" yields the raw
                     // byte buffer + its length.
                     fmt.push('y');
                     fmt.push('#');
@@ -1283,7 +1294,7 @@ fn gen_python_glue<'ctx>(
                     aero_args.push(t.into());
                 }
                 Ty::String => {
-                    // bytes → String: ParseTuple "y#" wrote (buf, len) into the two
+                    // bytes -> String: ParseTuple "y#" wrote (buf, len) into the two
                     // slots. Build a `{ data, len, cap }` String struct by value: copy
                     // the bytes into a malloc'd buffer (the Aero String owns it).
                     let buf = bld(cg.builder.build_load(slot_tys[start], slots[start], "arg_buf"))?
@@ -1299,7 +1310,12 @@ fn gen_python_glue<'ctx>(
                         false,
                     );
                     let tmp = bld(cg.builder.build_alloca(str_ty, "py_str"))?;
-                    let data = bld(cg.builder.build_call(cg.malloc, &[len.into()], "py_str_alloc"))?
+                    // Allocate len+1 and NUL-terminate so the resulting String is a
+                    // valid C string: `len()`/strlen-based builtins and passing the
+                    // String to a `str` parameter would otherwise overread the copy.
+                    let one64 = i64_ty.const_int(1, false);
+                    let alloc_len = bld(cg.builder.build_int_add(len, one64, "py_str_alloc_len"))?;
+                    let data = bld(cg.builder.build_call(cg.malloc, &[alloc_len.into()], "py_str_alloc"))?
                         .try_as_basic_value()
                         .basic()
                         .expect("malloc returned no value")
@@ -1309,6 +1325,10 @@ fn gen_python_glue<'ctx>(
                         &[data.into(), buf.into(), len.into()],
                         "py_str_cpy",
                     ))?;
+                    let endp = bld(unsafe {
+                        cg.builder.build_in_bounds_gep(i8_ty, data, &[len], "py_str_end")
+                    })?;
+                    bld(cg.builder.build_store(endp, i8_ty.const_zero()))?;
                     let zero = i32_ty.const_zero();
                     let one = i32_ty.const_int(1, false);
                     let two = i32_ty.const_int(2, false);
@@ -1689,7 +1709,7 @@ fn instance_subst(
 /// `subst` maps the current generic instance type parameters (`Generic(name)` to concrete);
 /// pass an empty map outside generic contexts.
 ///
-/// Enum layout: a tagged union `{ i64 tag, [N x i8] payload }` — the tag holds the
+/// Enum layout: a tagged union `{ i64 tag, [N x i8] payload }` - the tag holds the
 /// variant index; the payload is a byte buffer sized to the widest variant payload
 /// (values are memcpy'd in/out by the variant's own type).
 fn llvm_ty<'ctx>(
@@ -2068,7 +2088,7 @@ struct Codegen<'a, 'ctx> {
     i64_ty: IntType<'ctx>,
     i32_ty: IntType<'ctx>,
     bool_ty: IntType<'ctx>,
-    /// Variable DefId → stack-slot pointer
+    /// Variable DefId -> stack-slot pointer
     vars: HashMap<DefId, PointerValue<'ctx>>,
     /// Variable type table produced by type checking
     var_tys: &'a HashMap<DefId, Ty>,
@@ -2076,7 +2096,7 @@ struct Codegen<'a, 'ctx> {
     /// current scope's moved set are NOT dropped (ownership was transferred).
     moved_by_scope: &'a HashMap<ScopeId, HashSet<DefId>>,
     /// Declaration order of all variables in the current function (params first,
-    /// then `let`s in source order) — used to emit drops in reverse declaration order.
+    /// then `let`s in source order) - used to emit drops in reverse declaration order.
     decl_order: Vec<DefId>,
     /// Enclosing block scopes of the current codegen position (for drop-at-return).
     scope_stack: Vec<ScopeId>,
@@ -2111,7 +2131,7 @@ struct Codegen<'a, 'ctx> {
     /// Environment helpers (stdlib Phase 1): getenv/putenv
     getenv: FunctionValue<'ctx>,
     putenv: FunctionValue<'ctx>,
-    /// UTF-8 String helpers (stdlib Phase 1, "字符串 2.0"): self-contained module
+    /// UTF-8 String helpers (stdlib Phase 1, "String 2.0"): self-contained module
     /// functions so both JIT and AOT link cleanly. Operate on a NUL-terminated
     /// byte buffer + length.
     utf8_len_f: FunctionValue<'ctx>,
@@ -2127,7 +2147,7 @@ struct Codegen<'a, 'ctx> {
     funcs: Vec<FunctionValue<'ctx>>,
     /// called via instantiation)
     arenas: HashMap<DefId, ArenaSlots<'ctx>>,
-    /// Arena variable DefId → internal slots
+    /// Arena variable DefId -> internal slots
     arena_stack: Vec<Vec<DefId>>,
     /// Arenas created per block (auto-reset at scope end)
     hir_funcs: &'a [HirFn],
@@ -2139,7 +2159,7 @@ struct Codegen<'a, 'ctx> {
     hir_consts: &'a [HirConstDef],
     /// Enum definitions (variant index/payload lookup for codegen)
     hir_enums: &'a [HirEnumDef],
-    /// Method resolution table: (type_name, method_name) → function DefId.
+    /// Method resolution table: (type_name, method_name) -> function DefId.
     /// Both trait methods and inherent methods are registered here by lowering.
     method_map: &'a HashMap<(String, String), DefId>,
     /// Trait definitions (for `dyn Trait` vtable layout: method order/arity)
@@ -2147,18 +2167,18 @@ struct Codegen<'a, 'ctx> {
     /// Impl blocks (for `dyn Trait` vtable content: which concrete method each
     /// trait method maps to for a given concrete type)
     hir_impls: &'a [HirImplBlock],
-    /// Cached vtable globals for `dyn Trait`: (concrete_type_name, trait_name) →
-    /// the vtable global's pointer (an array of trait-method thunk pointers).
+    /// Cached vtable globals for `dyn Trait`: (concrete_type_name, trait_name) ->
+    /// the vtable global pointer (an array of trait-method thunk pointers).
     dyn_vtables: HashMap<(String, String), PointerValue<'ctx>>,
     /// User function table (HIR level, for expression type lookups)
     call_types: &'a HashMap<usize, Vec<Ty>>,
-    /// Generic call sites span.start → type args (from inference)
-    /// Generic struct literal span.start → concrete type args (from inference)
+    /// Generic call sites span.start -> type args (from inference)
+    /// Generic struct literal span.start -> concrete type args (from inference)
     struct_lit_types: &'a HashMap<usize, Vec<Ty>>,
-    /// Generic enum literal span.start → concrete type args (from inference)
+    /// Generic enum literal span.start -> concrete type args (from inference)
     enum_lit_types: &'a HashMap<usize, Vec<Ty>>,
     instance_funcs: HashMap<(DefId, Vec<Ty>), FunctionValue<'ctx>>,
-    /// Generic instance functions: (fn DefId, type args) → LLVM fn (monomorphization registry)
+    /// Generic instance functions: (fn DefId, type args) -> LLVM fn (monomorphization registry)
     instance_count: usize,
     /// Total generic instances generated (guards against infinite monomorphization)
     type_subst: HashMap<String, Ty>,
@@ -2187,7 +2207,7 @@ struct Codegen<'a, 'ctx> {
     debug_mode: bool,
     /// DI builder + compilation unit (the unit also provides the source file).
     dibuilder: Option<DebugInfoBuilder<'ctx>>,
-    /// The DI compilation unit — function subprogram scope root.
+    /// The DI compilation unit - function subprogram scope root.
     di_cu: Option<DICompileUnit<'ctx>>,
     /// The DI source file (used by subroutine types & function attachments).
     di_file: Option<DIFile<'ctx>>,
@@ -2337,7 +2357,10 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             self.gen_drop_all_live(f.body.scope_id)?;
             match &f.ret {
                 Some(t) => {
-                    let zero = self.t(t, f.span)?.into_int_type().const_zero();
+                    // A missing trailing `return` leaves a block open, so emit a zero value.
+                    // Aggregates (str/String/Vec/struct/enum) have no integer form, so taking
+                    // the int variant here would trip an inkwell assertion.
+                    let zero = self.t(t, f.span)?.const_zero();
                     bld(self.builder.build_return(Some(&zero)))?;
                 }
                 None => {
@@ -2399,7 +2422,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             .cloned()
             .zip(type_args.iter().cloned())
             .collect();
-        // Type-parameter map: Generic(name) → concrete type
+        // Type-parameter map: Generic(name) -> concrete type
         let empty_subst = HashMap::new();
         let mut param_tys = Vec::new();
         for (_, pty, sp) in &f.params {
@@ -2419,7 +2442,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         let func = self.module.add_function(&mono_name(&f.name, &type_args), fn_ty, None);
         self.instance_funcs.insert((fn_def_id, type_args), func);
         self.instance_count += 1;
-        // Instantiated signature → LLVM function type
+        // Instantiated signature -> LLVM function type
         // Generate the body under the instance context (Generic resolved via type_subst).
         // Nested instantiation mutates vars / cur_func / builder insertion point, so they are
         let saved_subst = std::mem::take(&mut self.type_subst);
@@ -2723,7 +2746,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             }
             HirStmt::Print(args, span) => self.gen_print(args, *span),
             HirStmt::Expr(expr, _) => {
-                // Expression statement: void calls / builtin asserts / arena.reset() — generate and drop
+                // Expression statement: void calls / builtin asserts / arena.reset() - generate and drop
                 if let HirExpr::Call {
                     def_id, args, span,
                 } = expr
@@ -3089,7 +3112,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             }
                         }
 
-                        // 2) loop: o = it.next(); if Some(x) → body else break
+                        // 2) loop: o = it.next(); if Some(x) -> body else break
                         let cond_bb = self
                             .context
                             .append_basic_block(self.cur_func, "for.cond");
@@ -3104,7 +3127,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         bld(self.builder.build_unconditional_branch(cond_bb))?;
 
                         self.builder.position_at_end(cond_bb);
-                        // `next(it: &mut Self)` — the iterator slot address is the receiver.
+                        // `next(it: &mut Self)` - the iterator slot address is the receiver.
                         let o = bld(self.builder.build_call(
                             next_func,
                             &[it_slot.into()],
@@ -3413,7 +3436,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
                     // Always matches: branch directly to the arm body. Any later
                     // arms are unreachable (the wildcard already matched), so stop
-                    // emitting the dispatch chain here — generating more instructions
+                    // emitting the dispatch chain here - generating more instructions
                     // on this now-terminated block would corrupt the LLVM IR.
                     bld(self.builder.build_unconditional_branch(body_bbs[i]))?;
                     break;
@@ -4939,51 +4962,74 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             let oob_bb = self.builder.get_insert_block().unwrap();
                             bld(self.builder.build_conditional_branch(is_null, merge_bb, ok_bb))?;
                             self.builder.position_at_end(ok_bb);
-                            // Read up to 4KB using fread, then NUL-terminate
-                            let buf_size = self.i64_ty.const_int(4096, false);
+                            // Determine the file size with fseek/ftell so the whole file
+                            // is read (the old fixed 4KB buffer silently truncated any
+                            // larger file). A negative size (seek/read failure) is
+                            // clamped to zero so we safely return an empty string.
+                            let i32_ty = self.context.i32_type();
+                            let zero32 = i32_ty.const_zero();
+                            let seek_end = i32_ty.const_int(2, false);   // SEEK_END
+                            let seek_set = i32_ty.const_zero();          // SEEK_SET
+                            bld(self.builder.build_call(
+                                self.fseek,
+                                &[fp.into(), zero32.into(), seek_end.into()],
+                                "fseek_end",
+                            ))?;
+                            let size32 = bld(self.builder.build_call(
+                                self.ftell,
+                                &[fp.into()],
+                                "ftell",
+                            ))?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or_else(|| self.internal_err(*span, "ftell returned no value"))?
+                            .into_int_value();
+                            let size_neg = bld(self.builder.build_int_compare(
+                                IntPredicate::SLT,
+                                size32,
+                                zero32,
+                                "size_neg",
+                            ))?;
+                            let size32 = bld(self.builder.build_select(
+                                size_neg,
+                                zero32,
+                                size32,
+                                "size_clamped",
+                            ))?
+                            .into_int_value();
+                            bld(self.builder.build_call(
+                                self.fseek,
+                                &[fp.into(), zero32.into(), seek_set.into()],
+                                "fseek_set",
+                            ))?;
+                            // Allocate size + 1 bytes (NUL terminator), read it all.
+                            let size_i64 = bld(self.builder.build_int_z_extend(size32, self.i64_ty, "size64"))?;
+                            let one64 = self.i64_ty.const_int(1, false);
+                            let alloc_bytes = bld(self.builder.build_int_add(
+                                size_i64,
+                                one64,
+                                "size1",
+                            ))?;
                             let buf = bld(self.builder.build_call(
                                 self.malloc,
-                                &[buf_size.into()],
+                                &[alloc_bytes.into()],
                                 "rbuf",
                             ))?
                             .try_as_basic_value()
                             .basic()
                             .ok_or_else(|| self.internal_err(*span, "malloc returned no value"))?
                             .into_pointer_value();
-                            let one64 = self.i64_ty.const_int(1, false);
-                            let read_n = bld(self.builder.build_call(
+                            bld(self.builder.build_call(
                                 self.fread,
-                                &[buf.into(), one64.into(), buf_size.into(), fp.into()],
+                                &[buf.into(), one64.into(), size_i64.into(), fp.into()],
                                 "fread",
-                            ))?
-                            .try_as_basic_value()
-                            .basic()
-                            .ok_or_else(|| self.internal_err(*span, "fread returned no value"))?
-                            .into_int_value();
-                            // NUL-terminate at the actual number of bytes read (fread
-                            // return value), clamped to the buffer size minus one so we
-                            // never write past the allocation. Without this, `len()`
-                            // (strlen) scans into uninitialized malloc garbage after the
-                            // file content.
-                            let cap_idx = self.i64_ty.const_int(4095, false);
-                            let is_gt = bld(self.builder.build_int_compare(
-                                IntPredicate::UGT,
-                                read_n,
-                                cap_idx,
-                                "rend_gt",
                             ))?;
-                            let end_idx = bld(self.builder.build_select(
-                                is_gt,
-                                cap_idx,
-                                read_n,
-                                "rend_idx",
-                            ))?
-                            .into_int_value();
+                            // NUL-terminate at the file size so `len()`/strlen is exact.
                             let endp = bld(unsafe {
                                 self.builder.build_in_bounds_gep(
                                     self.context.i8_type(),
                                     buf,
-                                    &[end_idx],
+                                    &[size_i64],
                                     "rend",
                                 )
                             })?;
@@ -5574,7 +5620,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 }
             }
             // `expr as dyn Trait` (Phase 9): box the target on the heap and build a
-            // fat pointer `{ data, vtable }` — the concrete value is copied to the
+            // fat pointer `{ data, vtable }` - the concrete value is copied to the
             // heap (malloc+memcpy), and the vtable holds a thunk per trait method.
             HirExpr::Cast { target, ty, span } => self.gen_dyn_cast(target, ty, *span),
         }
@@ -5953,12 +5999,18 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     }
                     Ty::Ptr(elem) => {
                         let elem_ty = self.t(elem, span)?;
+                        // The variable slot holds the pointer value; load it before indexing.
+                        // Using the slot address directly as the GEP base is wrong: index 0 would
+                        // clobber the pointer itself and large indices would go past the slot.
+                        let slot_ty = self.t(&ty, span)?;
+                        let base = bld(self.builder.build_load(slot_ty, ptr, "pbase"))?
+                            .into_pointer_value();
                         let idx = self.gen_value(index)?.scalar(span, "index")?;
                         let idx = self.coerce(idx, &self.i64_ty.into(), span, "index")?;
                         let slot = bld(unsafe {
                             self.builder.build_in_bounds_gep(
                                 elem_ty,
-                                ptr,
+                                base,
                                 &[idx.into_int_value()],
                                 "pidx",
                             )
@@ -6923,7 +6975,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         }
 
         // Tensor-returning ops (scal / axpy): blas_scal(alpha, x),
-        // blas_axpy(alpha, x, y) → same-shape tensor.
+        // blas_axpy(alpha, x, y) -> same-shape tensor.
         let res_llvm = self.t(&tensor_ty, span)?;
         let res = bld(self.builder.build_alloca(res_llvm, "blas"))?;
         let f_slot = bld(self.builder.build_alloca(self.i64_ty, "bl_tf"))?;
@@ -7110,12 +7162,16 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     }
                     Ty::Ptr(elem) => {
                         let elem_ty = self.t(elem, span)?;
+                        // Load the pointer value from the variable slot first (see gen_index).
+                        let slot_ty = self.t(&ty, span)?;
+                        let base = bld(self.builder.build_load(slot_ty, ptr, "pbasew"))?
+                            .into_pointer_value();
                         let idx = self.gen_value(index)?.scalar(span, "index write")?;
                         let idx = self.coerce(idx, &self.i64_ty.into(), span, "index write")?;
                         let slot = bld(unsafe {
                             self.builder.build_in_bounds_gep(
                                 elem_ty,
-                                ptr,
+                                base,
                                 &[idx.into_int_value()],
                                 "pidxw",
                             )
@@ -7599,7 +7655,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     }
                 };
                 match op {
-                    // Scal / Axpy → tensor of the same shape.
+                    // Scal / Axpy -> tensor of the same shape.
                     BlasOp::Scal | BlasOp::Axpy => {
                         let (elem_ty, shape) = elem;
                         Ok(Ty::Tensor {
@@ -7607,9 +7663,9 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             shape,
                         })
                     }
-                    // Amax → index (i64).
+                    // Amax -> index (i64).
                     BlasOp::Amax => Ok(Ty::I64),
-                    // Dot / Nrm2 / Asum → scalar of the tensor element type.
+                    // Dot / Nrm2 / Asum -> scalar of the tensor element type.
                     _ => Ok(elem.0),
                 }
             }
@@ -8294,7 +8350,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
     }
 
     /// Emit the implicit drop call for a variable (if its type implements `Drop` and
-    /// the value was not moved). Skipped for moved variables — ownership has been
+    /// the value was not moved). Skipped for moved variables - ownership has been
     /// transferred to the new owner, which drops it instead.
     fn gen_drop_var(&mut self, def_id: DefId, scope_id: ScopeId) -> Result<(), CodegenError> {
         let zero_span = Span { line: 0, col: 0, start: 0, end: 0 };
@@ -8581,6 +8637,18 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 ))?;
                 bld(self.builder.build_conditional_branch(ok, ok_bb, abort_bb))?;
                 self.builder.position_at_end(abort_bb);
+                // Out-of-capacity. Say what was asked for and what the pool holds:
+                // a bare abort() exits silently with no hint at all.
+                let overflow_msg = self.global_string(
+                    "arena overflow: alloc() needs %lld slot(s) = %lld bytes, capacity is %lld bytes\n",
+                )?;
+                let oob_args: [BasicMetadataValueEnum<'ctx>; 4] = [
+                    overflow_msg.into(),
+                    n.into_int_value().into(),
+                    n8.into(),
+                    cap.into(),
+                ];
+                bld(self.builder.build_call(self.printf, &oob_args, "arena_oob"))?;
                 bld(self.builder.build_call(self.abort, &[], "abort"))?;
                 bld(self.builder.build_unreachable())?;
                 self.builder.position_at_end(ok_bb);
@@ -9475,8 +9543,8 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         }
     }
 
-    /// Generate condition code (i1): comparisons → icmp; logic → short-circuit;
-    /// other scalars → compare with 0.
+    /// Generate condition code (i1): comparisons -> icmp; logic -> short-circuit;
+    /// other scalars -> compare with 0.
     fn gen_cond(&mut self, expr: &HirExpr) -> Result<IntValue<'ctx>, CodegenError> {
         match expr {
             HirExpr::Cmp { .. } => match self.gen_value(expr)? {
@@ -9528,7 +9596,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         // The unconditional branch to `merge_bb` is emitted from the *current*
         // insertion block, which is `rhs_bb` for a simple rhs but becomes the
         // inner merge block when `rhs` is itself a nested short-circuit (e.g.
-        // `a && (b || c)`). That block — not `rhs_bb` — is the real predecessor
+        // `a && (b || c)`). That block - not `rhs_bb` - is the real predecessor
         // of `merge_bb`, so it must be the phi's incoming edge or the SSA form
         // is invalid (missing/extra predecessors) and MCJIT crashes on it.
         let rhs_exit = self
@@ -9607,7 +9675,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         let c = self.gen_cond(cond)?;
         bld(self.builder.build_conditional_branch(c, body_bb, merge_bb))?;
         self.builder.position_at_end(body_bb);
-        // Push loop context for break/continue (continue → cond, break → merge)
+        // Push loop context for break/continue (continue -> cond, break -> merge)
         self.loop_stack.push((cond_bb, merge_bb));
         self.gen_block(body)?;
         self.loop_stack.pop();
@@ -10018,7 +10086,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         Ok(GenValue::Scalar(h.as_basic_value()))
     }
 
-    /// `hash_i64(x) -> i64` (Phase 11.1): splitmix64 finalizer — good avalanche
+    /// `hash_i64(x) -> i64` (Phase 11.1): splitmix64 finalizer - good avalanche
     /// mixing for integer keys.
     fn gen_hash_i64(&mut self, arg: &HirExpr, span: Span) -> Result<GenValue<'ctx>, CodegenError> {
         let x = self.gen_value(arg)?.scalar(span, "hash_i64 argument")?;
@@ -10072,7 +10140,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             GenValue::Scalar(v) => v,
             GenValue::Agg(p) => {
                 // A `&T`/`&mut T` parameter wants the address of an aggregate value
-                // (auto-borrow `f(v)` ⇒ `f(&v)`), so pass the slot pointer directly.
+                // (auto-borrow `f(v)` -> `f(&v)`), so pass the slot pointer directly.
                 if matches!(to, BasicTypeEnum::PointerType(_)) {
                     p.as_basic_value_enum()
                 } else {
@@ -10095,7 +10163,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         if v.get_type() == *to {
             return Ok(v);
         }
-        // Float-to-float conversion (f64 → f32 or f32 → f64)
+        // Float-to-float conversion (f64 -> f32 or f32 -> f64)
         if let (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(to_ty)) = (v, to) {
             let from_w = fv.get_type().get_bit_width();
             let to_w = to_ty.get_bit_width();
@@ -10118,7 +10186,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         }
         // Pointer-to-pointer bitcast: a typed aggregate slot (e.g. `[16 x i32]*`
         // from an array variable/field decayed to `*i32`) needs a pointer cast
-        // (same address, different pointee) — C array-to-pointer decay.
+        // (same address, different pointee) - C array-to-pointer decay.
         if let (BasicValueEnum::PointerValue(pv), BasicTypeEnum::PointerType(to_p)) = (v, to) {
             if pv.get_type() != *to_p {
                 let out = bld(self.builder.build_pointer_cast(pv, *to_p, "ptrcast"))?;
@@ -10162,7 +10230,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             }
         } else if from_w > to_w {
             if to_w == 1 {
-                // 1-bit (bool) zero-extends; others sign-extend (i32 → i64)
+                // 1-bit (bool) zero-extends; others sign-extend (i32 -> i64)
                 let zero = iv.get_type().const_zero();
                 bld(self.builder.build_int_compare(IntPredicate::NE, iv, zero, "tobool"))?
             } else {

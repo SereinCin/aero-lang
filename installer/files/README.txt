@@ -1,5 +1,5 @@
 ============================================
-  Aero Programming Language v1.2.0
+  Aero Programming Language v1.2.1
   Windows 64-bit (Portable)
 ============================================
 
@@ -7,6 +7,22 @@ Aero is a systems programming language that combines the
 performance of C with the safety of Rust, featuring:
 AOT compilation, generics, arena memory management,
 tensor operations, matmul, FFI, and more.
+
+NEW IN 1.2.1
+----------------------------------------
+  - Editor diagnostics work. The LSP publishDiagnostics
+    payload is valid JSON now, so VS Code underlines compiler
+    errors and warnings while you type.
+  - aero --version and aero --help print their output again.
+  - Paths containing spaces are accepted by aero run,
+    aero build and aero check.
+  - Two crashes fixed: dynamic indexing into an arena, and
+    returning a struct or tuple from the last expression of
+    a function.
+  - Over-allocating an arena reports an arena out-of-bounds
+    error instead of the misleading "overflowed its stack".
+  - Clearer diagnostics for builtin name collisions, unknown
+    types, self receivers, and HashMap keys other than i64.
 
 NEW IN 1.2.0
 ----------------------------------------
@@ -78,8 +94,13 @@ USAGE
 
 VS CODE EXTENSION (Optional)
 ----------------------------------------
-  Install aero-lang-1.2.0.vsix for syntax highlighting.
-  Drag the .vsix file into VS Code Extensions panel.
+  Install aero-lang-1.2.1.vsix for syntax highlighting and
+  compiler diagnostics. Drag the .vsix file into the VS Code
+  Extensions panel.
+
+  After installing, set "aero.lsp.executablePath" to the full
+  path of aero.exe to enable diagnostics, hover and
+  go-to-definition.
 
   Note: The extension is offline-only, not on the Marketplace.
 
@@ -104,6 +125,8 @@ FILES
   uninstall.bat   Uninstallation script
   update.bat      Update guide
   README.txt      This file
+  bin\            Helper scripts (aero_cmd.bat, aero_env.bat)
+  plugins\        Bundled standard plugins
 
 
 TROUBLESHOOTING
@@ -129,7 +152,13 @@ TROUBLESHOOTING
      User variables > Path > Edit > New > paste the Aero
      folder path > OK > OK.
 
+  Q: Diagnostics do not show up in VS Code.
+  A: Version 1.2.1 is the first release where the language
+     server sends valid diagnostics. Make sure the extension
+     is aero-lang-1.2.1.vsix or newer, and that
+     "aero.lsp.executablePath" points at this aero.exe.
+
 
 ============================================
-  Aero 1.2.0 - Windows 64-bit
+  Aero 1.2.1 - Windows 64-bit
 ============================================
