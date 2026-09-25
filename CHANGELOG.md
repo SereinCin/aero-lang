@@ -8,8 +8,8 @@ All notable changes to Aero are documented in this file.
 - Arena indexing with a runtime index no longer crashes the process. The
   compiler emitted an unchecked load, so `a.get(i)` with a computed `i` died
   with an access violation instead of reporting anything.
-- Returning a struct or tuple implicitly from the last expression of a function
-  no longer crashes codegen; the aggregate value is returned as written.
+- A function that declares a struct or tuple return type but never returns
+  no longer crashes codegen; a zero-initialized aggregate is produced instead.
 - Allocating past the end of an arena now reports an arena out-of-bounds error.
   It previously surfaced as "overflowed its stack", which pointed at the wrong
   subsystem.
