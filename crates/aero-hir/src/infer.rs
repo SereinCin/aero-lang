@@ -1343,12 +1343,12 @@ impl<'a> Infer<'a> {
                     for (i, arg) in args.iter().enumerate() {
                         let arg_ty = self.infer_expr(arg)?;
                         let param_ty = substitute(&f.params[i + 1].1, &subst);
-                        self.unify(
-                            &param_ty,
-                            &arg_ty,
-                            arg.span(),
-                            &format!("argument {} of method `{method}`", i + 1),
-                        )?;
+                        let ctx = format!(
+                            "argument {} of method `{method}`{}",
+                            i + 1,
+                            self.hashmap_arg_hint(&type_name, i)
+                        );
+                        self.unify(&param_ty, &arg_ty, arg.span(), &ctx)?;
                     }
                     // Record the concrete instance for codegen monomorphization.
                     self.instances.push(GenericInstance {
@@ -2580,6 +2580,20 @@ impl<'a> Infer<'a> {
         }
     }
 
+    /// Extra hint appended to a `HashMap` method-argument error. The map keys are
+    /// hardcoded `i64` in the 1.2.x stdlib and `V` is only pinned by the binding, so a
+    /// bare "expected `i64`, got `str`" tells the reader nothing about how to fix it.
+    fn hashmap_arg_hint(&self, type_name: &str, idx: usize) -> &'static str {
+        let base = type_name.rsplit('.').next().unwrap_or(type_name);
+        if base != "HashMap" {
+            return "";
+        }
+        if idx == 0 {
+            " (`HashMap` keys are always `i64` in 1.2.x; only the value type is generic)"
+        } else {
+            " (the value type of `HashMap<V>` is pinned by the binding, e.g. `let m: HashMap<str> = hash_map_new();`)"
+        }
+    }
     /// Receiver unification for method calls, with auto-referencing: when a method's
     /// receiver parameter is `&T` / `&mut T` (e.g. `fn next(it: &mut Self)`), the
     /// receiver expression `recv.method()` is treated as `method(&recv)` — the inner

@@ -1,5 +1,5 @@
 @echo off
-title Aero 1.2.0 Installer
+title Aero 1.2.1 Installer
 
 set "DIR=%~dp0"
 REM Remove the trailing backslash so the PATH entry is clean (e.g. C:\Aero)
@@ -7,7 +7,7 @@ set "DIR=%DIR:~0,-1%"
 
 echo.
 echo ============================================
-echo   Aero 1.2.0 Installer
+echo   Aero 1.2.1 Installer
 echo ============================================
 echo.
 echo Install folder: %DIR%
@@ -46,7 +46,7 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo   Installation complete!
-echo   Aero 1.2.0
+echo   Aero 1.2.1
 echo.
 echo   IMPORTANT: The PATH change only affects NEW terminals.
 echo   Close this window, then either:
