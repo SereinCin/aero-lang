@@ -905,6 +905,7 @@ impl Lowerer {
                         extern_symbol: _,
                         exported: _,
                         py_export: _,
+                        attrs: _,
                         span: m_span,
                     } = m_stmt
                     {

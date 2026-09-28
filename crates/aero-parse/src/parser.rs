@@ -30,6 +30,16 @@ pub struct Parser<'a> {
     pos: usize,
 }
 
+/// Aggregated attribute flags gathered from #[name] tokens before a
+/// struct/enum/n definition. ttrs preserves the raw attribute
+/// names in source order so downstream phases can match by name.
+#[derive(Default)]
+pub(crate) struct AttrFlags {
+    pub(crate) derives: Vec<String>,
+    pub(crate) exported: bool,
+    pub(crate) py_export: bool,
+    pub(crate) attrs: Vec<String>,
+}
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
         Parser { tokens, pos: 0 }
@@ -106,25 +116,25 @@ impl<'a> Parser<'a> {
 
     // ---------- attribute / type definitions ----------
 
+
     /// Attributes before a definition: `#[derive(T1, T2, ...)]`, `#[export]`
     /// and/or `#[py_export]`. Returns the derive names, `#[export]` presence and
     /// `#[py_export]` presence.
-    fn parse_attributes(&mut self) -> Result<(Vec<String>, bool, bool), ParseError> {
-        let mut derives = Vec::new();
-        let mut exported = false;
-        let mut py_export = false;
+    fn parse_attributes(&mut self) -> Result<AttrFlags, ParseError> {
+        let mut flags = AttrFlags::default();
         loop {
             let hash = self
                 .advance()
                 .ok_or_else(|| self.eof_error("expected `#`"))?;
             self.expect_kind(&TokenKind::LBracket, "left bracket `[`")?;
             let attr = self.expect_ident()?;
+            flags.attrs.push(attr.clone());
             match attr.as_str() {
                 "derive" => {
                     self.expect_kind(&TokenKind::LParen, "left paren `(`")?;
                     if !self.at(&TokenKind::RParen) {
                         loop {
-                            derives.push(self.expect_ident()?);
+                            flags.derives.push(self.expect_ident()?);
                             if !self.eat(&TokenKind::Comma) {
                                 break;
                             }
@@ -133,16 +143,20 @@ impl<'a> Parser<'a> {
                     self.expect_kind(&TokenKind::RParen, "right paren `)`")?;
                 }
                 "export" => {
-                    exported = true;
+                    flags.exported = true;
                 }
                 "py_export" => {
-                    exported = true;
-                    py_export = true;
+                    flags.exported = true;
+                    flags.py_export = true;
+                }
+                "no_mangle" | "entry" | "naked" | "interrupt" | "noinit"
+                | "privileged" | "link_section" => {
+                    // Accepted; lowering/codegen consume by name later.
                 }
                 other => {
                     return Err(ParseError {
                         msg: format!(
-                            "unsupported attribute `{other}` (supported: `#[derive(...)]`, `#[export]`, `#[py_export]`)"
+                            "unsupported attribute `{other}` (supported: `#[derive(...)]`, `#[export]`, `#[py_export]`, `#[no_mangle]`, `#[entry]`, `#[naked]`, `#[interrupt]`, `#[noinit]`, `#[privileged]`, `#[link_section]`)"
                         ),
                         line: hash.line,
                         col: hash.col,
@@ -154,18 +168,18 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok((derives, exported, py_export))
+        Ok(flags)
     }
 
     /// A statement guarded by attributes: `#[derive(...)] struct/enum ...`,
     /// `#[export] fn ...` or `#[py_export] fn ...`.
     fn parse_annotated_def(&mut self) -> Result<Stmt, ParseError> {
-        let (derives, exported, py_export) = self.parse_attributes()?;
+        let flags = self.parse_attributes()?;
         match self.peek() {
-            Some(t) if t.kind == TokenKind::Struct => self.parse_struct_def(&derives),
-            Some(t) if t.kind == TokenKind::Enum => self.parse_enum_def(&derives),
+            Some(t) if t.kind == TokenKind::Struct => self.parse_struct_def(&flags.derives),
+            Some(t) if t.kind == TokenKind::Enum => self.parse_enum_def(&flags.derives),
             Some(t) if t.kind == TokenKind::Fn => {
-                self.parse_fn_with_gpu(false, false, exported, py_export)
+                self.parse_fn_with_gpu(false, false, flags.exported, flags.py_export, flags.attrs.clone())
             }
             _ => Err(self.error_at_current(
                 "`#[...]` attributes must be followed by a `struct`, `enum` or `fn` definition",
@@ -799,7 +813,7 @@ impl<'a> Parser<'a> {
             });
         }
         match model {
-            "gpu" => self.parse_fn_with_gpu(true, false, false, false),
+            "gpu" => self.parse_fn_with_gpu(true, false, false, false, Vec::new()),
             _ => self.parse_extern_c_fn(&start),
         }
     }
@@ -876,12 +890,13 @@ impl<'a> Parser<'a> {
             extern_symbol,
             exported: false,
             py_export: false,
+            attrs: Vec::new(),
             span,
         })
     }
 
     fn parse_fn(&mut self) -> Result<Stmt, ParseError> {
-        self.parse_fn_with_gpu(false, false, false, false)
+        self.parse_fn_with_gpu(false, false, false, false, Vec::new())
     }
 
     /// `const fn <name>(<params>) [-> <ret>] { ... }` — a function whose body may
@@ -899,7 +914,7 @@ impl<'a> Parser<'a> {
                 col,
             });
         }
-        self.parse_fn_with_gpu(false, true, false, false)
+        self.parse_fn_with_gpu(false, true, false, false, Vec::new())
     }
 
     /// `const NAME[: TYPE] = <expr>;` — a top-level constant. The value is
@@ -935,6 +950,7 @@ impl<'a> Parser<'a> {
         is_const: bool,
         exported: bool,
         py_export: bool,
+        attrs: Vec<String>,
     ) -> Result<Stmt, ParseError> {
         let start = self.advance().expect("already checked for `fn`");
         let name = self.expect_ident()?;
@@ -1045,6 +1061,7 @@ impl<'a> Parser<'a> {
             extern_symbol: None,
             exported,
             py_export,
+            attrs,
             span,
         })
     }
