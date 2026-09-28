@@ -412,7 +412,7 @@ impl Drop for TmpDirCleanup {
 /// Both the object file and the intermediate exe live in an ASCII temp directory
 /// (msys gcc cannot handle non-ASCII paths); copied back on success.
 pub fn compile_to_exe(source: &str, exe_path: &Path, target: &str) -> Result<(), AeroError> {
-    compile_to_exe_linked(source, exe_path, &[], &[], OptLevel::default(), target)
+    compile_to_exe_linked(source, exe_path, &[], &[], OptLevel::default(), target, &[])
 }
 
 /// AOT compilation with link config (FFI): extra libs and search paths from the `[link]` section.
@@ -423,8 +423,9 @@ pub fn compile_to_exe_linked(
     lib_paths: &[String],
     opt: OptLevel,
     target: &str,
+    extra_args: &[String],
 ) -> Result<(), AeroError> {
-    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, &[], false)
+    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, extra_args, false)
 }
 
 /// AOT compilation to a shared library (`-shared` output: `.so`/`.dll`/`.dylib`).
@@ -525,7 +526,7 @@ fn compile_to_out(
         })?;
     }
     let context = Context::create();
-    let freestanding = emit_obj_only || is_freestanding_triple(target);
+    let freestanding = is_freestanding_triple(target);
     let module = crate::compile_pipeline_emit(&context, source, emit_main, py_ext, freestanding)?;
     if std::env::var("AERO_DUMP_IR").is_ok() {
         let s = module.print_to_string();
@@ -600,7 +601,7 @@ pub fn compile_file_to_exe(
         col: 0,
         msg: format!("cannot read file {}: {e}", source_file.display()),
     })?;
-    compile_to_exe_linked(&source, exe_path, &[], &[], opt, target)
+    compile_to_exe_linked(&source, exe_path, &[], &[], opt, target, &[])
 }
 
 /// Content-addressable build cache key for a compilation config.
@@ -669,7 +670,7 @@ pub fn compile_to_exe_cached(
         col: 0,
         msg: format!("cannot create cache dir {}: {e}", cache_dir.display()),
     })?;
-    compile_to_exe_linked(source, &cached, libs, lib_paths, opt, target)?;
+    compile_to_exe_linked(source, &cached, libs, lib_paths, opt, target, &[])?;
     std::fs::copy(&cached, exe_path).map_err(|e| AeroError {
         phase: "AOT",
         line: 0,
