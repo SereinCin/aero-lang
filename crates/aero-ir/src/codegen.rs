@@ -569,6 +569,7 @@ pub fn compile<'ctx>(
     enum_lit_types: &HashMap<usize, Vec<Ty>>,
     emit_main: bool,
     py_ext: Option<&crate::PyExtSpec>,
+    freestanding: bool,
 ) -> Result<Module<'ctx>, CodegenError> {
     let module = context.create_module("aero");
     let builder = context.create_builder();
@@ -580,9 +581,15 @@ pub fn compile<'ctx>(
     // calls C `printf` (variadic); AND/OR short-circuit via br + phi.
     let printf_ty = i8_ptr_ty.fn_type(&[i8_ptr_ty.into()], true);
     let printf = module.add_function("printf", printf_ty, None);
+    if freestanding {
+        printf.set_linkage(inkwell::module::Linkage::Internal);
+    }
 
     // Declare abort() (fallback for arena out-of-bounds)
     let abort = module.add_function("abort", context.void_type().fn_type(&[], false), None);
+    if freestanding {
+        abort.set_linkage(inkwell::module::Linkage::Internal);
+    }
 
 
     // The main function: standard C entry `main(argc, argv)`. Top-level statements
@@ -606,6 +613,10 @@ pub fn compile<'ctx>(
     aero_argc.set_initializer(&i32_ty.const_zero());
     let aero_argv = module.add_global(i8_ptr_ty.ptr_type(AddressSpace::from(0u16)), None, "aero_argv");
     aero_argv.set_initializer(&i8_ptr_ty.ptr_type(AddressSpace::from(0u16)).const_zero());
+    if freestanding {
+        aero_argc.set_linkage(inkwell::module::Linkage::Internal);
+        aero_argv.set_linkage(inkwell::module::Linkage::Internal);
+    }
 
     // Declare user functions (DefId aligned with program.funcs; builtin slots hold placeholders)
     let empty_subst = HashMap::new();
