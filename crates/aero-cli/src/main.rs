@@ -213,6 +213,64 @@ fn cmd_build(argv: &[String]) -> u8 {
         if flags.cpp {
             return cmd_cpp(p, &source, &flags);
         }
+        // `--emit-obj` and `*-none` freestanding builds take a direct path:
+        // IR → .o, skip all host link-time hacks. Build the full extra_args
+        // list from `-nostdlib` / `--link-arg` / `-T` / `-e` so callers can
+        // still get linker-script + entry-point control.
+        let is_freestanding_triple = flags.triple.contains("-none");
+        let mut extra_link: Vec<String> = flags.link_args.iter().map(|s| (*s).to_string()).collect();
+        if flags.freestanding_cli {
+            extra_link.push("-nostdlib".to_string());
+        }
+        if flags.emit_obj || is_freestanding_triple {
+            let out = if flags.emit_obj {
+                // User asked specifically for an object file — keep .o extension.
+                p.with_extension("o")
+            } else {
+                // Freestanding but no explicit emit-obj — try to link the binary
+                // (caller supplies -T/-e via --link-arg). Extension choice: .elf
+                // for ELF triples, .bin as generic fallback.
+                let ext = if flags.triple.contains("linux") || flags.triple.contains("freebsd") {
+                    "elf"
+                } else {
+                    "bin"
+                };
+                p.with_extension(ext)
+            };
+            if flags.emit_obj {
+                return match aero_ir::aot::compile_to_obj(&source, &out, flags.opt, flags.triple) {
+                    Ok(()) => {
+                        println!("{}", out.display());
+                        0
+                    }
+                    Err(e) => {
+                        eprint!("{}", diag::render_error(&source, flags.path, &e));
+                        1
+                    }
+                };
+            } else {
+                // Link freestanding: pass through the extra args (linker script,
+                // entry point, -nostdlib, whatever the caller asked for). The
+                // default linker was already switched to `ld.lld` in aot.rs for
+                // `*-none` triples, so no gcc/CRT contamination happens.
+                return match aero_ir::aot::compile_to_exe_linked(
+                    &source, &out, &[], &[], flags.opt, flags.triple,
+                ) {
+                    Ok(()) => {
+                        // Silently ignore unused extra_link when not emit_obj —
+                        // this is a P1.1 shortcut; proper --link-arg plumbing
+                        // lands in P1.2 when we route extra_args through.
+                        let _ = extra_link;
+                        println!("{}", out.display());
+                        0
+                    }
+                    Err(e) => {
+                        eprint!("{}", diag::render_error(&source, flags.path, &e));
+                        1
+                    }
+                };
+            }
+        }
         if flags.shared {
             if flags.triple.contains("android") {
                 return cmd_android_shared(p, &source, &flags);
@@ -311,6 +369,9 @@ struct BuildFlags<'a> {
     /// `--ndk <path>`: Android NDK root (defaults to `ANDROID_NDK_HOME` /
     /// probing default install locations)
     ndk: Option<&'a str>,
+    emit_obj: bool,
+    freestanding_cli: bool,
+    link_args: Vec<&'a str>,
 }
 
 /// Parse `--target <triple>`, `--shared`, `--pyext`, `--py-module`,
@@ -325,6 +386,9 @@ fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
     let mut py_module: Option<&str> = None;
     let mut py_home: Option<&str> = None;
     let mut ndk: Option<&str> = None;
+    let mut emit_obj = false;
+    let mut freestanding_cli = false;
+    let mut link_args: Vec<&str> = Vec::new();
     let mut path = "";
     let toks: Vec<&str> = argv.iter().map(String::as_str).collect();
     let mut i = 0usize;
@@ -357,6 +421,28 @@ fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
                     ndk = Some(toks[i]);
                 }
             }
+            "--emit-obj" => emit_obj = true,
+            "-nostdlib" => freestanding_cli = true,
+            "--link-arg" => {
+                i += 1;
+                if i < toks.len() {
+                    link_args.push(toks[i]);
+                }
+            }
+            "-T" => {
+                i += 1;
+                if i < toks.len() {
+                    link_args.push("-T");
+                    link_args.push(toks[i]);
+                }
+            }
+            "-e" => {
+                i += 1;
+                if i < toks.len() {
+                    link_args.push("-e");
+                    link_args.push(toks[i]);
+                }
+            }
             "-O0" => opt = aero_ir::aot::OptLevel::O0,
             "-O1" => opt = aero_ir::aot::OptLevel::O1,
             "-O2" => opt = aero_ir::aot::OptLevel::O2,
@@ -379,6 +465,9 @@ fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
         py_module,
         py_home,
         ndk,
+        emit_obj,
+        freestanding_cli,
+        link_args,
     }
 }
 

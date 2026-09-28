@@ -281,13 +281,28 @@ fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str
     Ok(())
 }
 
+/// A target triple that ends in `-none` (e.g. `riscv64-unknown-none`,
+/// `aarch64-unknown-none`) signals a freestanding / bare-metal build: no
+/// CRT, no host libs, no host ABI assumptions. Aero switches the linker
+/// default and skips host-specific link-time hacks (COFF stack reserve,
+/// ELF _snprintf alias) when this predicate returns true.
+pub(crate) fn is_freestanding_triple(target: &str) -> bool {
+    target.contains("-none") || target.contains("unknown-none")
+}
+
 /// Link an object file into an executable (or shared library) with the system linker.
 ///
-/// The linker is chosen via the `AERO_LINKER` env var, defaulting to `gcc`.
-/// gcc automatically brings the CRT startup objects, default libs (UCRT) and
-/// the console subsystem, so a COFF object file containing `main` is enough.
-/// `shared=true` adds `-shared` (dynamic-library output: `.so`/`.dll`/`.dylib`);
-/// `extra_args` are appended verbatim (used for cross-toolchains, e.g. NDK).
+/// The linker is chosen via the `AERO_LINKER` env var, defaulting to `gcc` for
+/// host targets and `ld.lld` for freestanding (`*-none`) triples — both values
+/// are overridable. gcc automatically brings the CRT startup objects, default
+/// libs (UCRT) and the console subsystem, so a COFF object file containing
+/// `main` is enough. `shared=true` adds `-shared` (dynamic-library output:
+/// `.so`/`.dll`/`.dylib`); `extra_args` are appended verbatim (used for
+/// cross-toolchains, e.g. NDK, or custom linker scripts / entry points).
+///
+/// Host-specific link-time hacks (COFF `-Wl,--stack,67108864`, ELF
+/// `-Wl,--defsym=_snprintf=snprintf`) are **skipped** for freestanding
+/// targets — neither has any meaning without a CRT.
 ///
 /// Platform adjustments driven by `target`:
 /// - COFF (Windows): add `-Wl,--stack,67108864` (large main-thread stack reserve).
@@ -302,7 +317,16 @@ fn link(
     extra_args: &[String],
     target: &str,
 ) -> Result<(), AeroError> {
-    let linker = std::env::var("AERO_LINKER").unwrap_or_else(|_| "gcc".to_string());
+    // Default linker: gcc for host targets (brings CRT startup objects and
+    // host libs); `ld.lld` for freestanding — LLVM 22's bundled LLD already
+    // has RISC-V / AArch64 backends and needs no cross-toolchain install.
+    // AERO_LINKER overrides both defaults.
+    let default_linker = if is_freestanding_triple(target) {
+        "ld.lld"
+    } else {
+        "gcc"
+    };
+    let linker = std::env::var("AERO_LINKER").unwrap_or_else(|_| default_linker.to_string());
     if std::env::var("AERO_AOT_DEBUG").is_ok() {
         eprintln!("[aot-dbg] link: spawning `{linker}`");
     }
@@ -328,13 +352,16 @@ fn link(
     }
     cmd.arg("-o").arg(out_path);
     let coff = target.contains("windows");
-    if coff {
+    let freestanding = is_freestanding_triple(target);
+    if coff && !freestanding {
         // Give the executable a large main-thread stack reserve. By default MinGW/LLD
         // links with a ~1MB stack, so deep recursion (>~50k frames) overflows and
         // aborts the whole process. Bumping this to 64MB makes high-intensity
         // recursive code robust without changing the language semantics.
+        // Skipped for freestanding: bare-metal kernels manage stacks manually.
         cmd.arg("-Wl,--stack,67108864");
-    } else if (target.contains("linux") || target.contains("android"))
+    } else if !freestanding
+        && (target.contains("linux") || target.contains("android"))
         && !is_macho_triple(target)
     {
         // The string-runtime calls `_snprintf` (the Windows CRT export name). On
@@ -342,6 +369,7 @@ fn link(
         // executable links resolve (GNU ld / lld both support --defsym). Mach-O
         // is excluded: `_snprintf` is renamed to `snprintf` in emit_object, so
         // ld64/lld resolve `_snprintf` against libSystem directly.
+        // Skipped for freestanding: `_snprintf` won't be emitted there at all.
         cmd.arg("-Wl,--defsym=_snprintf=snprintf");
     }
     let out = cmd
@@ -396,7 +424,7 @@ pub fn compile_to_exe_linked(
     opt: OptLevel,
     target: &str,
 ) -> Result<(), AeroError> {
-    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, &[])
+    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, &[], false)
 }
 
 /// AOT compilation to a shared library (`-shared` output: `.so`/`.dll`/`.dylib`).
@@ -413,7 +441,7 @@ pub fn compile_to_shared(
     target: &str,
     extra_args: &[String],
 ) -> Result<(), AeroError> {
-    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, None, extra_args)
+    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, None, extra_args, false)
 }
 
 /// AOT compilation to a Python C extension (`.pyd` on Windows / `.so` on Unix).
@@ -443,6 +471,33 @@ pub fn compile_to_pyext(
         false,
         Some(spec),
         &[],
+        false,
+    )
+}
+
+/// Compile source to a freestanding object file — IR → LLVM obj, no linking.
+///
+/// Used by `aero build --emit-obj --target <triple>` (especially freestanding
+/// targets like `riscv64-unknown-none`) where the user brings their own linker
+/// script, entry point, and startup code.
+pub fn compile_to_obj(
+    source: &str,
+    obj_path: &Path,
+    opt: OptLevel,
+    target: &str,
+) -> Result<(), AeroError> {
+    compile_to_out(
+        source,
+        obj_path,
+        &[],
+        &[],
+        opt,
+        target,
+        false,
+        true,
+        None,
+        &[],
+        true,
     )
 }
 
@@ -459,6 +514,7 @@ fn compile_to_out(
     emit_main: bool,
     py_ext: Option<&crate::PyExtSpec>,
     extra_args: &[String],
+    emit_obj_only: bool,
 ) -> Result<(), AeroError> {
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AeroError {
@@ -469,7 +525,8 @@ fn compile_to_out(
         })?;
     }
     let context = Context::create();
-    let module = crate::compile_pipeline_emit(&context, source, emit_main, py_ext)?;
+    let freestanding = emit_obj_only || is_freestanding_triple(target);
+    let module = crate::compile_pipeline_emit(&context, source, emit_main, py_ext, freestanding)?;
     if std::env::var("AERO_DUMP_IR").is_ok() {
         let s = module.print_to_string();
         println!("{s}");
@@ -506,6 +563,19 @@ fn compile_to_out(
     std::mem::forget(module);
     std::mem::forget(context);
     emit_result?;
+    if emit_obj_only {
+        // Caller requested only an object file — skip linking entirely. This is
+        // the default for freestanding/bare-metal targets where the user brings
+        // their own linker script, entry point, and startup code. The temp .obj
+        // is copied to the caller's output path and we're done.
+        std::fs::copy(&obj_path, out_path).map_err(|e| AeroError {
+            phase: "AOT",
+            line: 0,
+            col: 0,
+            msg: format!("cannot write object file {}: {e}", out_path.display()),
+        })?;
+        return Ok(());
+    }
     link(&obj_path, &out_tmp, libs, lib_paths, shared, extra_args, target)?;
     // Copy from the ASCII temp dir back to the target path (supports non-ASCII paths)
     std::fs::copy(&out_tmp, out_path).map_err(|e| AeroError {
@@ -642,7 +712,7 @@ mod tests {
         let triples = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"];
         for t in triples {
             let context = Context::create();
-            let module = crate::compile_pipeline_emit(&context, src, false, None).expect("pipeline");
+            let module = crate::compile_pipeline_emit(&context, src, false, None, false).expect("pipeline");
             let tmp = std::env::temp_dir().join(format!("aero_android_{}_test.o", t.replace('-', "_")));
             let ok = emit_object(&module, &tmp, OptLevel::O2, t);
             assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
@@ -677,7 +747,7 @@ mod tests {
         ];
         for t in triples {
             let context = Context::create();
-            let module = crate::compile_pipeline_emit(&context, src, false, None).expect("pipeline");
+            let module = crate::compile_pipeline_emit(&context, src, false, None, false).expect("pipeline");
             let tmp = std::env::temp_dir().join(format!("aero_ios_{}_test.o", t.replace('-', "_")));
             let ok = emit_object(&module, &tmp, OptLevel::O2, t);
             assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
@@ -717,7 +787,7 @@ mod tests {
             api_version: 1013,
             windows: true,
         };
-        let module = crate::compile_pipeline_emit(&context, src, false, Some(&spec)).expect("pipeline");
+        let module = crate::compile_pipeline_emit(&context, src, false, Some(&spec), false).expect("pipeline");
         let llvm_ir = module.print_to_string();
         let ir = llvm_ir.to_string_lossy().into_owned();
         // Keep the LLVMString alive: dropping it calls LLVMDisposeMessage, which

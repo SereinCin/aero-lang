@@ -48,7 +48,7 @@ pub fn compile_pipeline<'ctx>(
     context: &'ctx Context,
     source: &str,
 ) -> Result<Module<'ctx>, AeroError> {
-    compile_pipeline_emit(context, source, true, None)
+    compile_pipeline_emit(context, source, true, None, false)
 }
 
 /// Python-extension build spec (`aero build --pyext`): the module name plus the
@@ -73,6 +73,7 @@ pub(crate) fn compile_pipeline_emit<'ctx>(
     source: &str,
     emit_main: bool,
     py_ext: Option<&PyExtSpec>,
+    freestanding: bool,
 ) -> Result<Module<'ctx>, AeroError> {
     let mut tokens = aero_std::std_tokens().to_vec();
     let user_tokens = aero_lex::lex(source).map_err(|e| AeroError {
@@ -111,6 +112,7 @@ pub(crate) fn compile_pipeline_emit<'ctx>(
         &result.enum_lit_types,
         emit_main,
         py_ext,
+        freestanding,
     )
     .map_err(|e| AeroError {
         phase: "codegen",
