@@ -319,6 +319,10 @@ pub enum Stmt {
         /// Whether this function is marked `#[py_export]`: `#[export]` plus an
         /// auto-generated CPython binding (wrapper, method table, PyInit_).
         py_export: bool,
+        /// All attribute names collected before this function (e.g. "no_mangle",
+        /// "entry", "naked", "interrupt", "noinit", "privileged", "link_section",
+        /// plus "derive", "export", "py_export"). Preserves order of appearance.
+        attrs: Vec<String>,
         span: Span,
     },
     /// `return [<expr>];`
