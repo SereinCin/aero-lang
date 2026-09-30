@@ -1,4 +1,4 @@
-﻿/// AST → HIR lowering: name resolution + scope binding + type annotations
+/// AST → HIR lowering: name resolution + scope binding + type annotations
 /// lowered to `Ty`.
 ///
 /// Two-pass flow:
@@ -322,6 +322,19 @@ const BUILTINS: &[(&str, &[Ty], Option<Ty>)] = &[
 ("file_exists", &[Ty::Str], Some(Ty::Bool)),
 ];
 
+/// Phase 1.3 bare-metal volatile/atomic builtins.
+/// Box::new can't live in a const, so these are assembled at runtime.
+fn p13_builtins() -> Vec<(&'static str, Vec<Ty>, Option<Ty>)> {
+    vec![
+        ("volatile_load_i32", vec![Ty::Ptr(Box::new(Ty::I32))], Some(Ty::I32)),
+        ("volatile_store_i32", vec![Ty::Ptr(Box::new(Ty::I32)), Ty::I32], None),
+        ("atomic_load_acquire_i32", vec![Ty::Ptr(Box::new(Ty::I32))], Some(Ty::I32)),
+        ("atomic_store_release_i32", vec![Ty::Ptr(Box::new(Ty::I32)), Ty::I32], None),
+        ("atomic_cmpxchg_i32", vec![Ty::Ptr(Box::new(Ty::I32)), Ty::I32, Ty::I32], Some(Ty::I32)),
+        ("atomic_fence_acqrel", vec![], None),
+    ]
+}
+
 impl Lowerer {
     pub fn lower(program: &Program) -> Result<HirProgram, LowerError> {
         let mut lowerer = Lowerer {
@@ -388,7 +401,14 @@ impl Lowerer {
             start: 0,
             end: 0,
         };
-        for (name, params, ret) in BUILTINS {
+        let mut all_builtins: Vec<(&'static str, Vec<Ty>, Option<Ty>)> = BUILTINS
+            .iter()
+            .map(|(n, p, r)| (*n, p.to_vec(), r.clone()))
+            .collect();
+        for (n, ps, r) in p13_builtins() {
+            all_builtins.push((n, ps, r));
+        }
+        for (name, params, ret) in all_builtins {
             let def_id = lowerer.funcs.len() as DefId;
             lowerer.func_by_name.insert(name.to_string(), def_id);
             lowerer.funcs.push(FuncSig {

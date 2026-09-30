@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+﻿use std::collections::{HashMap, HashSet};
 
 use crate::const_eval;
 use aero_hir::hir::{
@@ -41,7 +41,7 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
     PointerValue,
 };
-use inkwell::{AddressSpace, DLLStorageClass, FloatPredicate, GlobalVisibility, IntPredicate};
+use inkwell::{AddressSpace, AtomicOrdering, DLLStorageClass, FloatPredicate, GlobalVisibility, IntPredicate};
 
 /// Codegen error (with line/column).
 #[derive(Debug, Clone, PartialEq)]
@@ -5599,7 +5599,59 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             ))?;
                             return Ok(GenValue::Scalar(v.into()));
                         }
-                        _ => {
+                                                // ---- P1.3 bare-metal load/cmpxchg builtins ----
+                        "volatile_load_i32" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    msg: "`volatile_load_i32` requires 1 pointer argument".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let ptr = self.gen_value(&args[0])?.scalar(*span, "volatile_load ptr")?.into_pointer_value();
+                            let load_ptr = ptr.as_basic_value_enum().into_pointer_value();
+                            let val = bld(self.builder.build_load(self.i32_ty, load_ptr, "vload"))?;
+                            let inst = val.as_instruction_value().ok_or_else(|| self.internal_err(*span, "volatile load not an instruction"))?;
+                            inst.set_volatile(true).map_err(|e| CodegenError { msg: format!("set_volatile: {e}"), line: span.line, col: span.col })?;
+                            return Ok(GenValue::Scalar(val));
+                        }
+                        "atomic_load_acquire_i32" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    msg: "`atomic_load_acquire_i32` requires 1 pointer argument".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let ptr = self.gen_value(&args[0])?.scalar(*span, "atomic_load ptr")?.into_pointer_value();
+                            let load_ptr = ptr.as_basic_value_enum().into_pointer_value();
+                            let val = bld(self.builder.build_load(self.i32_ty, load_ptr, "aload"))?;
+                            let inst = val.as_instruction_value().ok_or_else(|| self.internal_err(*span, "atomic load not an instruction"))?;
+                            inst.set_atomic_ordering(AtomicOrdering::Acquire).map_err(|e| CodegenError { msg: format!("set_atomic_ordering: {e}"), line: span.line, col: span.col })?;
+                            return Ok(GenValue::Scalar(val));
+                        }
+                        "atomic_cmpxchg_i32" => {
+                            if args.len() != 3 {
+                                return Err(CodegenError {
+                                    msg: "`atomic_cmpxchg_i32` requires 3 arguments (ptr, expected, desired)".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let ptr = self.gen_value(&args[0])?.scalar(*span, "cmpxchg ptr")?.into_pointer_value();
+                            let expected = self.gen_value(&args[1])?.scalar(*span, "cmpxchg expected")?
+                                .into_int_value();
+                            let desired = self.gen_value(&args[2])?.scalar(*span, "cmpxchg desired")?
+                                .into_int_value();
+                            let pair = bld(self.builder.build_cmpxchg(
+                                ptr, expected, desired,
+                                AtomicOrdering::AcquireRelease, AtomicOrdering::Acquire,
+                            ))?;
+                            // LLVM cmpxchg returns { old_value, i1 success } as struct
+                            let old = bld(self.builder.build_extract_value(pair, 0, "cmpxchg_old"))?;
+                            return Ok(GenValue::Scalar(old));
+                        }
+_ => {
                             // Builtin asserts have no return value; cannot be used as expressions
                             return Err(CodegenError {
                                 msg: format!("builtin function `{}` has no return value and cannot be used as an expression", hir_f.name),
@@ -9832,6 +9884,52 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             bld(self.builder.build_call(self.free, &[s.into()], "free"))?;
             return Ok(());
         }
+            // ---- P1.3 bare-metal void builtins ----
+            match name {
+                "volatile_store_i32" => {
+                    if args.len() != 2 {
+                        return Err(CodegenError {
+                            msg: "`volatile_store_i32` requires 2 arguments (ptr, value)".to_string(),
+                            line: span.line,
+                            col: span.col,
+                        });
+                    }
+                    let ptr = self.gen_value(&args[0])?.scalar(span, "volatile_store ptr")?.into_pointer_value();
+                    let val = self.gen_value(&args[1])?.scalar(span, "volatile_store val")?;
+                    let val = self.coerce(val, &self.i32_ty.into(), span, "volatile_store val")?.into_int_value();
+                    let inst = bld(self.builder.build_store(ptr, val))?;
+                    inst.set_volatile(true).map_err(|e| CodegenError { msg: format!("set_volatile: {e}"), line: span.line, col: span.col })?;
+                    return Ok(());
+                }
+                "atomic_store_release_i32" => {
+                    if args.len() != 2 {
+                        return Err(CodegenError {
+                            msg: "`atomic_store_release_i32` requires 2 arguments (ptr, value)".to_string(),
+                            line: span.line,
+                            col: span.col,
+                        });
+                    }
+                    let ptr = self.gen_value(&args[0])?.scalar(span, "atomic_store ptr")?.into_pointer_value();
+                    let val = self.gen_value(&args[1])?.scalar(span, "atomic_store val")?;
+                    let val = self.coerce(val, &self.i32_ty.into(), span, "atomic_store val")?.into_int_value();
+                    let inst = bld(self.builder.build_store(ptr, val))?;
+                    inst.set_atomic_ordering(AtomicOrdering::Release).map_err(|e| CodegenError { msg: format!("set_atomic_ordering: {e}"), line: span.line, col: span.col })?;
+                    return Ok(());
+                }
+                "atomic_fence_acqrel" => {
+                    if !args.is_empty() {
+                        return Err(CodegenError {
+                            msg: "`atomic_fence_acqrel` takes no arguments".to_string(),
+                            line: span.line,
+                            col: span.col,
+                        });
+                    }
+                    // SequentiallyConsistent ensures all fences observed by other cores.
+                    bld(self.builder.build_fence(AtomicOrdering::SequentiallyConsistent, false, "fence"))?;
+                    return Ok(());
+                }
+                _ => {}
+            }
         let cond: IntValue<'ctx> = match name {
             "assert" => {
                 if args.len() != 1 {
