@@ -43,6 +43,14 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, AtomicOrdering, DLLStorageClass, FloatPredicate, GlobalVisibility, IntPredicate};
 
+// P1.4x: 直调 LLVM C API 绕开 inkwell build_indirect_call 空 Vec segfault（Windows 0xC0000005）
+// 根因：inkwell 内部 Vec::as_mut_ptr() 对空 Vec 返回非 null，LLVM 解引用 crash
+// inkwell 0.9 (llvm22-1) 重导出了 llvm_sys_221，故走 inkwell::llvm_sys 路径，版本自动对齐
+use inkwell::llvm_sys::core::LLVMBuildCall2;
+use inkwell::llvm_sys::prelude::{LLVMBuilderRef, LLVMTypeRef, LLVMValueRef};
+use inkwell::types::AsTypeRef;
+use inkwell::values::AsValueRef;
+
 /// Codegen error (with line/column).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodegenError {
@@ -2834,16 +2842,10 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     self.gen_method_call(expr)?;
                     return Ok(());
                 }
-                // Inline assembly statement (P1.4 bare-metal). Expression-
-                // level use rejected by gen_value below.
-                // NOTE: LLVM 22 Windows static lib build_indirect_call with
-                // inline asm pointers segfaults (0xC0000005). True emit
-                // deferred to P1.4x; AST->HIR->lower->typecheck routing is
-                // complete and verified.
-                if let HirExpr::Asm { operands, .. } = expr {
-                    for op in operands {
-                        self.gen_value(op)?;
-                    }
+                // P1.4x: Inline assembly statement — REAL EMIT
+                // 直调 llvm_sys::LLVMBuildCall2 发射（inkwell 0.9 无可用路径）
+                if let HirExpr::Asm { template, constraints, sideeffects, operands, span, .. } = expr {
+                    self.emit_inline_asm(template, constraints, *sideeffects, operands, *span)?;
                     return Ok(());
                 }
                 self.gen_value(expr)?;
@@ -4162,6 +4164,83 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 col: span.col,
             }),
         }
+    }
+
+    // P1.4x: 直调 LLVM C API 发射 inline asm
+    fn emit_inline_asm(
+        &mut self,
+        template: &str,
+        constraints: &str,
+        sideeffects: bool,
+        operands: &[HirExpr],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        // 约束串校验：LLVM 用 `~{memory}` 表示内存 clobber；GCC 风格的裸 `memory`
+        // 会让 LLVM 约束解析器以访问违例崩溃（0xC0000005，无任何诊断）。提前拦下。
+        for seg in constraints.split(',') {
+            if seg.trim() == "memory" {
+                return Err(CodegenError {
+                    msg: "inline asm constraint `memory` is not valid for LLVM; use `~{memory}` instead"
+                        .into(),
+                    line: span.line,
+                    col: span.col,
+                });
+            }
+        }
+        // 1. 求值 operands：一次生成，同时收集 LLVM 类型与 LLVM value
+        //    （gen_value 可能有副作用，绝不能调用两次）
+        let mut param_tys: Vec<BasicMetadataTypeEnum> = Vec::new();
+        let mut operand_values: Vec<LLVMValueRef> = Vec::new();
+        for op in operands {
+            let gt = self.gen_value(op)?;
+            match gt {
+                GenValue::Scalar(v) => {
+                    param_tys.push(v.get_type().into());
+                    operand_values.push(v.as_value_ref());
+                }
+                GenValue::Agg(ptr) => {
+                    param_tys.push(ptr.get_type().into());
+                    operand_values.push(ptr.as_value_ref());
+                }
+            }
+        }
+
+        // 2. 构造 inline asm 函数类型: void(operand_types...)
+        let fn_type = self.context.void_type().fn_type(&param_tys, false);
+
+        // 3. 创建 inline asm 函数指针（GNU/ATT 语法, can_throw=false for bare-metal）
+        let asm_fn = self.context.create_inline_asm(
+            fn_type,
+            template.to_string(),
+            constraints.to_string(),
+            sideeffects,
+            false, // alignstack
+            None,  // dialect: ATT/GNU syntax（默认）
+            false, // can_throw
+        );
+
+        // 4. 直调 LLVM C API：空 args 必须传 null_mut()，非空传 Vec.as_mut_ptr()
+        let fn_ty_ref: LLVMTypeRef = fn_type.as_type_ref();
+        let fn_val_ref: LLVMValueRef = asm_fn.as_value_ref();
+        let builder_ref: LLVMBuilderRef = self.builder.as_mut_ptr();
+        unsafe {
+            // 空 args 传 null_mut()（inkwell 用 Vec::as_mut_ptr() 会得到非 null 悬垂指针）
+            let args_ptr = if operand_values.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                operand_values.as_mut_ptr()
+            };
+            LLVMBuildCall2(
+                builder_ref,
+                fn_ty_ref,
+                fn_val_ref,
+                args_ptr,
+                operand_values.len() as u32,
+                b"\0".as_ptr() as *const std::ffi::c_char,
+            );
+        }
+        // void call：忽略返回值
+        Ok(())
     }
 
     /// Generate an expression value.
