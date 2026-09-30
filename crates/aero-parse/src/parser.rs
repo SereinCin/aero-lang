@@ -1,4 +1,4 @@
-use aero_lex::token::{Token, TokenKind};
+﻿use aero_lex::token::{Token, TokenKind};
 
 use crate::ast::{
     BinOp, CmpOp, EnumVariant, Expr, LogicOp, MatchArm, MatchPattern, Program, Stmt, TypeExpr,
@@ -1590,7 +1590,65 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Ident(name) => {
                 self.advance();
-                if self.eat(&TokenKind::LParen) {
+                if name == "asm" && self.at(&TokenKind::LParen) {
+                    // Inline assembly (P1.4 bare-metal): asm!("nop", "") / asm("nop", "")
+                    // Parse 2 string-literal args: template + constraints.
+                    let start_span = span_of(&tok);
+                    self.advance(); // consume `(`
+                    let mut args = Vec::new();
+                    if !self.at(&TokenKind::RParen) {
+                        loop {
+                            args.push(self.parse_expr()?);
+                            if !self.eat(&TokenKind::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    let end = self.expect_kind(&TokenKind::RParen, "right paren `)`")?;
+                    if args.len() < 2 {
+                        return Err(ParseError {
+                            msg: format!("`asm` requires at least 2 arguments (template and constraints), got {}", args.len()),
+                            line: start_span.line,
+                            col: start_span.col,
+                        });
+                    }
+                    let template = match &args[0] {
+                        Expr::Str(s, _) => s.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                msg: "`asm` first argument must be a string literal (assembly template)".into(),
+                                line: start_span.line,
+                                col: start_span.col,
+                            });
+                        }
+                    };
+                    let constraints = match &args[1] {
+                        Expr::Str(s, _) => s.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                msg: "`asm` second argument must be a string literal (constraints)".into(),
+                                line: start_span.line,
+                                col: start_span.col,
+                            });
+                        }
+                    };
+                    // Remaining args (inputs/outputs) are operands — P1.4 keeps them
+                    // in the Vec but lowers/codegen ignore them for now.
+                    let operands: Vec<Expr> = args.into_iter().skip(2).collect();
+                    let span = Span {
+                        line: tok.line,
+                        col: tok.col,
+                        start: tok.start,
+                        end: end.end,
+                    };
+                    Expr::Asm {
+                        template,
+                        constraints,
+                        sideeffects: true, // P1.4 default: conservatively volatile
+                        operands,
+                        span,
+                    }
+                } else if self.eat(&TokenKind::LParen) {
                     // Function call name(args...)
                     let mut args = Vec::new();
                     if !self.at(&TokenKind::RParen) {

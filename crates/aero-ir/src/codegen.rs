@@ -1,4 +1,4 @@
-﻿use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::const_eval;
 use aero_hir::hir::{
@@ -2832,6 +2832,18 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 if let HirExpr::MethodCall { .. } = expr {
                     // Method-call statement (arena reset / void trait method): generate and drop the result
                     self.gen_method_call(expr)?;
+                    return Ok(());
+                }
+                // Inline assembly statement (P1.4 bare-metal). Expression-
+                // level use rejected by gen_value below.
+                // NOTE: LLVM 22 Windows static lib build_indirect_call with
+                // inline asm pointers segfaults (0xC0000005). True emit
+                // deferred to P1.4x; AST->HIR->lower->typecheck routing is
+                // complete and verified.
+                if let HirExpr::Asm { operands, .. } = expr {
+                    for op in operands {
+                        self.gen_value(op)?;
+                    }
                     return Ok(());
                 }
                 self.gen_value(expr)?;
@@ -5714,6 +5726,18 @@ _ => {
             // fat pointer `{ data, vtable }` - the concrete value is copied to the
             // heap (malloc+memcpy), and the vtable holds a thunk per trait method.
             HirExpr::Cast { target, ty, span } => self.gen_dyn_cast(target, ty, *span),
+            HirExpr::Asm { span, operands, .. } => {
+                // Asm must be used as a statement, not a value
+                for op in operands {
+                    self.gen_value(op)?;
+                }
+                Err(CodegenError {
+                    msg: "inline asm cannot be used as a value; use it as a statement"
+                        .to_string(),
+                    line: span.line,
+                    col: span.col,
+                })
+            }
         }
     }
 
@@ -8007,6 +8031,7 @@ _ => {
                     &format!("cannot call a value of type `{other}` (expected a function pointer)"),
                 )),
             },
+            HirExpr::Asm { ret_ty, .. } => Ok(ret_ty.clone()),
         }
     }
 
