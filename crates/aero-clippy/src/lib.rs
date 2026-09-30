@@ -453,6 +453,11 @@ fn expr_uses(ctx: &mut Ctx, e: &Expr) {
         }
         Expr::ArenaLit(..) | Expr::TensorLit(.., _) | Expr::Int(..) | Expr::Bool(..) | Expr::Str(..)
         | Expr::Float(..) | Expr::Char(..) => {}
+        Expr::Asm { operands, .. } => {
+            for op in operands {
+                expr_uses(ctx, op);
+            }
+        }
     }
 }
 
@@ -1024,6 +1029,11 @@ fn expr_checks(ctx: &mut Ctx, e: &Expr) {
         Expr::Try { target, .. } => expr_checks(ctx, target),
         Expr::Field { target, .. } => expr_checks(ctx, target),
         Expr::Cast { target, .. } => expr_checks(ctx, target),
+        Expr::Asm { operands, .. } => {
+            for op in operands {
+                expr_checks(ctx, op);
+            }
+        }
         Expr::Tuple(elts, _) => {
             for e in elts {
                 expr_checks(ctx, e);

@@ -587,6 +587,16 @@ pub enum HirExpr {
         ty: Ty,
         span: Span,
     },
+    /// Inline assembly (P1.4 bare-metal) — lowered from Expr::Asm.
+    /// `ret_ty` is what the inline asm call produces (P1.4 is always void).
+    Asm {
+        template: String,
+        constraints: String,
+        sideeffects: bool,
+        operands: Vec<HirExpr>,
+        ret_ty: Ty,
+        span: Span,
+    },
 }
 
 impl HirExpr {
@@ -621,7 +631,8 @@ impl HirExpr {
             | HirExpr::StructLit { span, .. }
             | HirExpr::EnumLit { span, .. }
             | HirExpr::Field { span, .. }
-            | HirExpr::Cast { span, .. } => *span,
+            | HirExpr::Cast { span, .. }
+            | HirExpr::Asm { span, .. } => *span,
             HirExpr::ConstRef { span, .. } => *span,
         }
     }

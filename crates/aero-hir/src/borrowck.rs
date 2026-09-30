@@ -450,6 +450,11 @@ impl<'a> Checker<'a> {
             HirExpr::Field { target, .. } => self.collect_uses_expr(target, i, map),
             HirExpr::Cast { target, .. } => self.collect_uses_expr(target, i, map),
             HirExpr::Try { target, .. } => self.collect_uses_expr(target, i, map),
+            HirExpr::Asm { operands, .. } => {
+                for op in operands {
+                    self.collect_uses_expr(op, i, map);
+                }
+            }
             _ => {}
         }
     }

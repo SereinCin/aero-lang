@@ -1,4 +1,4 @@
-use crate::span::Span;
+﻿use crate::span::Span;
 
 /// Binary arithmetic operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +218,19 @@ pub enum Expr {
     Cmp { op: CmpOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
     /// Logical operation, e.g. `a AND b` (short-circuit, boolean result)
     Logic { op: LogicOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
+    /// Inline assembly (P1.4 bare-metal): `asm!("nop", "")` or `asm!("sti", "memory")`.
+    /// Parsed from the magic `asm!` macro-like call.
+    Asm {
+        /// The assembly template string (e.g. `"nop"` or `"syscall"`).
+        template: String,
+        /// LLVM constraint string (e.g. `"=r"`, `"memory"`, or `""`).
+        constraints: String,
+        /// Side effects present (P1.4 defaults to true).
+        sideeffects: bool,
+        /// Optional inline operands (inputs/outputs). P1.4 keeps this empty.
+        operands: Vec<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -247,7 +260,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Cmp { span, .. }
-            | Expr::Logic { span, .. } => *span,
+            | Expr::Logic { span, .. }
+            | Expr::Asm { span, .. } => *span,
         }
     }
 }
