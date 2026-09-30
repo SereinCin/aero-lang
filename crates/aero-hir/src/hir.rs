@@ -1,4 +1,4 @@
-/// HIR (High-level Intermediate Representation) — a semantics-oriented
+﻿/// HIR (High-level Intermediate Representation) — a semantics-oriented
 /// intermediate representation.
 ///
 /// Differences from the AST:
@@ -283,6 +283,8 @@ pub struct HirFn {
     pub builtin: bool,
     /// Function body
     pub body: HirBlock,
+    /// Attribute names (#[entry], #[no_mangle], #[naked], #[link_section], ...)
+    pub attrs: Vec<String>,
     /// Source position of the definition (for error reporting)
     pub span: Span,
 }

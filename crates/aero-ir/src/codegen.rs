@@ -645,18 +645,26 @@ pub fn compile<'ctx>(
         // symbol defaults to the *bare* name (module prefix dropped, `m::sqlite3_open`
         // links as `sqlite3_open`). Mangled module names (`m::foo`) are flattened
         // to `m_foo` so the emitted LLVM symbol has no `::`.
-        let llvm_name = f
-            .extern_symbol
-            .as_deref()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                if f.is_extern {
-                    f.name.rsplit("::").next().unwrap_or(&f.name).to_string()
-                } else {
-                    f.name.clone()
-                }
-            })
-            .replace("::", "_");
+        // #[no_mangle] short-circuits everything below: keep the user's name
+        // exactly as written — no module flattening, no Aero mangling. This is
+        // what bare-metal needs so the linker / bootloader can find the function
+        // by its declared name.
+        let has_no_mangle = f.attrs.iter().any(|a| a == "no_mangle");
+        let llvm_name = if has_no_mangle {
+            f.name.clone()
+        } else {
+            f.extern_symbol
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    if f.is_extern {
+                        f.name.rsplit("::").next().unwrap_or(&f.name).to_string()
+                    } else {
+                        f.name.clone()
+                    }
+                })
+                .replace("::", "_")
+        };
         if f.is_extern && matches!(llvm_name.as_str(), "printf" | "abort") {
             return Err(CodegenError {
                 msg: format!("extern symbol name `{llvm_name}` is reserved"),
@@ -691,6 +699,13 @@ pub fn compile<'ctx>(
             func.set_linkage(inkwell::module::Linkage::External);
             func.as_global_value().set_visibility(GlobalVisibility::Default);
             func.as_global_value().set_dll_storage_class(DLLStorageClass::Export);
+        }
+        // #[no_mangle] / #[entry]: force External linkage so the symbol survives
+        // dead-stripping and is visible to the linker (bare-metal bootloader needs
+        // to find the entry point by name).
+        if f.attrs.iter().any(|a| a == "no_mangle" || a == "entry") && !f.exported {
+            func.set_linkage(inkwell::module::Linkage::External);
+            func.as_global_value().set_visibility(GlobalVisibility::Default);
         }
         funcs.push(func);
     }
