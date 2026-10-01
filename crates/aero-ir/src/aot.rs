@@ -26,9 +26,10 @@ use crate::AeroError;
 
 /// Host backend initialized once (LLVM global state).
 static INIT_TARGET: Once = Once::new();
-/// Cross-compile backends (aarch64/arm/x86) initialized once each.
+/// Cross-compile backends (aarch64/arm/riscv/x86) initialized once each.
 static INIT_AARCH64: Once = Once::new();
 static INIT_ARM: Once = Once::new();
+static INIT_RISCV: Once = Once::new();
 static INIT_X86: Once = Once::new();
 
 /// Optimization level for AOT native codegen. Maps to an LLVM pass pipeline
@@ -110,6 +111,9 @@ fn init_target_for(triple: &str) {
         "i686" | "i386" | "x86_64" => INIT_X86.call_once(|| {
             // The `x86` backend covers both x86 (i386/i686) and x86_64 targets.
             let _ = Target::initialize_x86(&InitializationConfig::default());
+        }),
+        "riscv" | "riscv32" | "riscv64" => INIT_RISCV.call_once(|| {
+            let _ = Target::initialize_riscv(&InitializationConfig::default());
         }),
         _ => {}
     }
