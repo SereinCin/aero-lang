@@ -693,8 +693,10 @@ fn cmd_ios_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     };
     let arch = ios_arch(flags.triple);
     let extra = vec![
-        format!("-arch {arch}"),
-        format!("-isysroot {sysroot}"),
+        "-arch".to_string(),
+        arch.to_string(),
+        "-isysroot".to_string(),
+        sysroot,
         "-fPIC".to_string(),
         // iOS 13 is a safe deployment floor for both devices and the simulator.
         "-mios-version-min=13.0".to_string(),
