@@ -40,6 +40,7 @@ jobs:
       - name: Install LLVM 22 (macOS)
         run: |
           brew install llvm@22
+          brew link llvm@22 --force
           echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
 
       - name: Verify Xcode SDK + llvm-config
