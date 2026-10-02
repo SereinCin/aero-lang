@@ -1,4 +1,4 @@
-/// AST → HIR lowering: name resolution + scope binding + type annotations
+﻿/// AST → HIR lowering: name resolution + scope binding + type annotations
 /// lowered to `Ty`.
 ///
 /// Two-pass flow:
@@ -2661,6 +2661,26 @@ impl Lowerer {
                 Ok(HirExpr::Cast {
                     target: Box::new(target),
                     ty,
+                    span: *span,
+                })
+            }
+            Expr::Asm {
+                template,
+                constraints,
+                sideeffects,
+                operands,
+                span,
+            } => {
+                let mut hir_ops = Vec::new();
+                for op in operands {
+                    hir_ops.push(self.lower_expr(op)?);
+                }
+                Ok(HirExpr::Asm {
+                    template: template.clone(),
+                    constraints: constraints.clone(),
+                    sideeffects: *sideeffects,
+                    operands: hir_ops,
+                    ret_ty: Ty::Void,
                     span: *span,
                 })
             }

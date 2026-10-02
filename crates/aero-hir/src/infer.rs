@@ -2340,6 +2340,12 @@ impl<'a> Infer<'a> {
                 }
                 Ok(ty.clone())
             }
+            HirExpr::Asm { operands, ret_ty, .. } => {
+                for op in operands {
+                    self.infer_expr(op)?;
+                }
+                Ok(ret_ty.clone())
+            }
         }
     }
 
