@@ -715,6 +715,26 @@ pub fn compile<'ctx>(
             func.set_linkage(inkwell::module::Linkage::External);
             func.as_global_value().set_visibility(GlobalVisibility::Default);
         }
+        // #[naked]: skip function prologue/epilogue — the kernel writer takes full
+        // control of the stack frame. LLVM doesn't emit any function entry code.
+        if f.attrs.iter().any(|a| a == "naked") {
+            use inkwell::attributes::{Attribute, AttributeLoc};
+            let naked_id = Attribute::get_named_enum_kind_id("naked");
+            if naked_id != 0 {
+                let naked_attr = context.create_enum_attribute(naked_id, 0);
+                func.add_attribute(AttributeLoc::Function, naked_attr);
+            }
+        }
+        // #[interrupt]: mark the function as an interrupt handler. LLVM may emit
+        // target-specific prologue (save all caller-saved GPRs, switch stack frame).
+        if f.attrs.iter().any(|a| a == "interrupt") {
+            use inkwell::attributes::{Attribute, AttributeLoc};
+            let int_kind = Attribute::get_named_enum_kind_id("interrupt");
+            if int_kind != 0 {
+                let int_attr = context.create_enum_attribute(int_kind, 0);
+                func.add_attribute(AttributeLoc::Function, int_attr);
+            }
+        }
         funcs.push(func);
     }
 
@@ -809,6 +829,20 @@ pub fn compile<'ctx>(
     // getenv(name) -> const char* (NULL when unset); _putenv_s(name, value) -> 0 ok.
     let getenv = declared("getenv", i8_ptr_ty.fn_type(&[i8_ptr_ty.into()], false));
     let putenv = declared("_putenv_s", i32_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into()], false));
+
+    // Freestanding targets: all libc externs declared above (malloc..putenv) get
+    // Internal linkage so the symbol stays for code generation but the linker
+    // won't import it from an external CRT. The kernel is responsible for
+    // providing its own implementations (or the link will fail loudly, which is
+    // the desired behavior). printf and abort are already handled above.
+    if freestanding {
+        let funcs = [malloc, free, memcpy, memset, strlen, memcmp, strcmp, snprintf,
+                     strtoll, fopen, fclose, fprintf, fread, fwrite, fseek, ftell,
+                     strstr, rand, time, getenv, putenv];
+        for f in funcs {
+            f.set_linkage(inkwell::module::Linkage::Internal);
+        }
+    }
 
     // UTF-8 String helpers (stdlib Phase 1, "String 2.0"): build self-contained
     // module functions so both JIT and AOT link cleanly (no extra runtime symbols).
