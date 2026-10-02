@@ -2,6 +2,63 @@
 
 All notable changes to Aero are documented in this file.
 
+## [1.2.4] - 2026-10-03
+
+### Added — P1 bare-metal line
+- **Bare-metal target support** (P1.1). `*-unknown-none` triples
+  (`x86_64-unknown-none`, `aarch64-unknown-none`, `riscv64-unknown-none`)
+  now produce freestanding ELF `.o` files that link with `ld.lld` without any
+  libc. Verified on all three backends end-to-end.
+- **`#[entry]` entry point** (P1.2). Marks the kernel/OS entry function so
+  freestanding mode has a well-defined start symbol instead of looking for
+  `main`. Attribute chain `HirFn → emit_object → codegen` fully propagates.
+- **`#[no_mangle]`** consumed in codegen — emits the function with its plain
+  name so the linker / bootloader can find it.
+- **`#[link_arg]` plumbed through** — custom linker arguments pass from CLI
+  (`--link-arg`) all the way to `ld.lld`.
+- **`volatile`, `atomic`, `fence` builtins** (P1.3). `volatile_load` /
+  `volatile_store` generate LLVM volatile loads and stores; `atomic_*` emit
+  `atomicrmw` / `cmpxchg`; `fence` / `fence_acq` / `fence_rel` emit the
+  corresponding LLVM fences.
+- **`asm!` inline assembly** (P1.4). Parser → HIR → lower → typecheck →
+  codegen. Constraints validated, illegal `memory` constraint converted to a
+  clear error telling the user to write `~{memory}`. The codegen bypasses
+  inkwell's `build_indirect_call` (which crashes on Windows with empty args)
+  and calls `LLVMBuildCall2` directly. `-arch arm64` is now split into
+  individual `Command::arg` calls so Rust's `Command` API passes the linker
+  args through correctly on iOS too.
+- **`static` / `static mut` global variables** (P1.5). Module-scope storage
+  with thread-local and section placement support.
+
+### Fixed
+- **riscv64-unknown-none segfault** on Windows. inkwell `target-riscv` was
+  missing from features and `Target::initialize_riscv` was never called in
+  the AOT initializer; both added.
+- **Android cross-linker**: `--defsym=_snprintf=snprintf` now skipped for
+  Android (renaming happens in emit_object, same as Mach-O), and `snprintf`
+  resolved directly from bionic libc. Removed the redundant `-lc` flag.
+- **iOS shared library**: linker arguments were concatenated into single
+  strings (`"-arch arm64"`, `"-isysroot /path"`). `Command::arg` does not
+  shell-split, so clang received `"-arch arm64"` as one argument and died.
+  Split into individual args.
+- **Android NDK / CI**: upgraded `android-actions/setup-android` to v4
+  (v3 failed with the obsolete `tools` package), pinned NDK 27, added
+  `libpolly-22-dev` required by `llvm-sys 221`, and switched LLVM install to
+  the `apt.llvm.org` script (Ubuntu noble ships only up to LLVM 20). `brew
+  link llvm@22 --force` added on macOS to handle the keg-only formula.
+
+### Changed
+- Cross-compile smoke tests (iOS `.dylib`, Android `.so`) green again on CI.
+  The two workflows — broken since 2026-09-26 over a mix of distro package
+  drift, brew keg-only defaults, and a Rust `Command` footgun — now pass.
+
+### Notes
+- This is the first release where Aero can compile a freestanding bare-metal
+  kernel from end to end. Follow-up work (P1.6) will strip unconditional libc
+  symbol declarations from freestanding IR and do module pruning on the
+  standard library; those are not part of this release.
+- `aero-v1.2.4-windows-x86_64.zip` is published with this release.
+
 ## [1.2.1] - 2026-09-26
 
 ### Fixed
