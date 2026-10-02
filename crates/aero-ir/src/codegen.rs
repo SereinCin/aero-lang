@@ -929,34 +929,47 @@ pub fn compile<'ctx>(
 
     let entry = context.append_basic_block(main, "entry");
     cg.builder.position_at_end(entry);
-    // Save argc/argv for the arg_count()/arg(i) builtins (M1.2)
-    let argc = main.get_nth_param(0).unwrap().into_int_value();
-    let argv = main.get_nth_param(1).unwrap().into_pointer_value();
-    bld(cg.builder.build_store(cg.aero_argc.as_pointer_value(), argc))?;
-    bld(cg.builder.build_store(cg.aero_argv.as_pointer_value(), argv))?;
-    // Register the coverage dump with atexit so it runs at every exit path.
-    if cg.cov_mode {
-        if let Some(fini) = cg.cov_fini {
-            let atexit = cg.module.add_function(
-                "atexit",
-                cg.i32_ty.fn_type(&[i8_ptr_ty.into()], false),
-                None,
-            );
-            let fini_ptr = fini.as_global_value().as_pointer_value();
-            let fini_as_i8 = bld(cg.builder.build_pointer_cast(
-                fini_ptr,
-                i8_ptr_ty,
-                "cov_fini_ptr",
-            ))?;
-            bld(cg.builder.build_call(atexit, &[fini_as_i8.into()], "cov_atexit"))?;
-        }
+    if freestanding && !program.main.stmts.is_empty() {
+        return Err(CodegenError {
+            msg: "freestanding mode does not allow top-level statements; mark an entry #[entry] function and put all executable code there".to_string(),
+            line: 1,
+            col: 1,
+        });
     }
-    cg.decl_order.clear();
-    // Debug info: treat the top-level body as an anonymous `main` subprogram so its
-    // statements get line positions too.
-    cg.di_attach_function("main", Span { line: 1, col: 1, start: 0, end: 1 }, main);
-    cg.gen_block(&program.main)?;
-    if !cg.cur_block_terminated() {
+    if !freestanding {
+        // Save argc/argv for the arg_count()/arg(i) builtins (M1.2)
+        let argc = main.get_nth_param(0).unwrap().into_int_value();
+        let argv = main.get_nth_param(1).unwrap().into_pointer_value();
+        bld(cg.builder.build_store(cg.aero_argc.as_pointer_value(), argc))?;
+        bld(cg.builder.build_store(cg.aero_argv.as_pointer_value(), argv))?;
+        // Register the coverage dump with atexit so it runs at every exit path.
+        if cg.cov_mode {
+            if let Some(fini) = cg.cov_fini {
+                let atexit = cg.module.add_function(
+                    "atexit",
+                    cg.i32_ty.fn_type(&[i8_ptr_ty.into()], false),
+                    None,
+                );
+                let fini_ptr = fini.as_global_value().as_pointer_value();
+                let fini_as_i8 = bld(cg.builder.build_pointer_cast(
+                    fini_ptr,
+                    i8_ptr_ty,
+                    "cov_fini_ptr",
+                ))?;
+                bld(cg.builder.build_call(atexit, &[fini_as_i8.into()], "cov_atexit"))?;
+            }
+        }
+        cg.decl_order.clear();
+        // Debug info: treat the top-level body as an anonymous main subprogram so its
+        // statements get line positions too.
+        cg.di_attach_function("main", Span { line: 1, col: 1, start: 0, end: 1 }, main);
+        cg.gen_block(&program.main)?;
+        if !cg.cur_block_terminated() {
+            let zero = cg.i64_ty.const_zero();
+            bld(cg.builder.build_return(Some(&zero)))?;
+        }
+    } else {
+        // Freestanding: C main is Internal + empty, just needs a terminator.
         let zero = cg.i64_ty.const_zero();
         bld(cg.builder.build_return(Some(&zero)))?;
     }

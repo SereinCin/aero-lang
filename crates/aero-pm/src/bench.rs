@@ -135,6 +135,7 @@ fn run_one_bench(bench: &str, source: &str, cfg: &BenchConfig) -> Result<BenchRe
         &[],
         aero_ir::aot::OptLevel::default(),
         aero_ir::aot::host_target_triple(),
+        &[],
     )
     .map_err(|e| PmError::new(format!("bench `{bench}` failed to compile: {}", e.msg)))?;
     let _ = std::fs::remove_file(&path);

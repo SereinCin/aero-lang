@@ -254,7 +254,7 @@ fn cmd_build(argv: &[String]) -> u8 {
                 // default linker was already switched to `ld.lld` in aot.rs for
                 // `*-none` triples, so no gcc/CRT contamination happens.
                 return match aero_ir::aot::compile_to_exe_linked(
-                    &source, &out, &[], &[], flags.opt, flags.triple,
+                    &source, &out, &[], &[], flags.opt, flags.triple, &flags.link_args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
                 ) {
                     Ok(()) => {
                         // Silently ignore unused extra_link when not emit_obj —
@@ -1479,7 +1479,7 @@ fn cmd_cov(file: &str) -> u8 {
     unsafe {
         std::env::set_var("AERO_COV", "1");
     }
-    let compile = aero_ir::aot::compile_to_exe_linked(&source, &exe, &[], &[], aero_ir::aot::OptLevel::O0, aero_ir::aot::host_target_triple());
+    let compile = aero_ir::aot::compile_to_exe_linked(&source, &exe, &[], &[], aero_ir::aot::OptLevel::O0, aero_ir::aot::host_target_triple(), &[]);
     unsafe {
         std::env::remove_var("AERO_COV");
     }
