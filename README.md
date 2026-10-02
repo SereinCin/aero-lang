@@ -2,25 +2,23 @@
 
 A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
 
-Current release: **1.2.1** (2026-09-26).
+Current release: **1.2.4** (2026-10-03).
 
 ## Quick Start
 
 ### Windows
-1. Download `aero-v1.2.1-windows-x86_64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+1. Download `aero-v1.2.4-windows-x86_64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
 2. Extract to any folder, double-click `install.bat`
 3. Open a new cmd window and run `aero --help`
 
-### Linux / macOS
-Packages for 1.2.1 are not published yet; these targets have not been rebuilt
-since 1.2.0. The 1.2.0 installers still work and stay available:
-
+### Linux
 ```bash
-# Linux x86_64
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_linux.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/install_linux.sh | sh
+```
 
-# macOS x86_64 / arm64
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.0/install_macos.sh | sh
+### macOS (Apple Silicon & Intel)
+```bash
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/install_macos.sh | sh
 ```
 
 ### Build from Source
@@ -70,6 +68,11 @@ while (i < 10) {
 | Editor diagnostics from the LSP server | Fixed in 1.2.1 |
 | Benchmark framework (aero bench) | Stable |
 | Linux x86_64 / aarch64 | New in 1.1.2 |
+| Bare-metal targets (x86_64 / aarch64 / riscv64-unknown-none) | New in 1.2.4 |
+| `#[entry]` / `#[no_mangle]` / `#[link_arg]` attributes | New in 1.2.4 |
+| `volatile`, `atomic`, `fence` builtins | New in 1.2.4 |
+| `asm!` inline assembly (parser → HIR → real LLVM emit) | New in 1.2.4 |
+| `static` / `static mut` module-scope globals | New in 1.2.4 |
 | `aero install` (GitHub ecosystem) | New in 1.2.0 |
 
 ## Crates
