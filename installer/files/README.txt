@@ -94,15 +94,18 @@ USAGE
 
 VS CODE EXTENSION (Optional)
 ----------------------------------------
-  Install aero-lang-1.2.1.vsix for syntax highlighting and
-  compiler diagnostics. Drag the .vsix file into the VS Code
-  Extensions panel.
+  The extension is published on the VS Code Marketplace as
+  "Aero Language" (serein.aero-lang). Search for it in the
+  Extensions panel, or run:
+     code --install-extension serein.aero-lang
+
+  Offline alternative: install aero-lang-1.2.2.vsix from the
+  aero-lang-vscode repository. Drag the .vsix file into the
+  VS Code Extensions panel.
 
   After installing, set "aero.lsp.executablePath" to the full
   path of aero.exe to enable diagnostics, hover and
   go-to-definition.
-
-  Note: The extension is offline-only, not on the Marketplace.
 
 
 UPDATE
@@ -155,7 +158,7 @@ TROUBLESHOOTING
   Q: Diagnostics do not show up in VS Code.
   A: Version 1.2.1 is the first release where the language
      server sends valid diagnostics. Make sure the extension
-     is aero-lang-1.2.1.vsix or newer, and that
+     is aero-lang-1.2.2.vsix or newer, and that
      "aero.lsp.executablePath" points at this aero.exe.
 
 
