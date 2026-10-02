@@ -48,10 +48,10 @@ jobs:
 
       # Android NDK r25+ provides the LLVM prebuilt toolchain with bionic
       # sysroot; the aero CLI discovers it via ANDROID_NDK_HOME.
-      - name: Install Android NDK
-        uses: android-actions/setup-android@v3
+      - name: Install Android SDK + NDK
+        uses: android-actions/setup-android@v4
         with:
-          loglevel: info
+          packages: 'platform-tools ndk;27.0.12077973'
 
       - name: Locate NDK
         id: ndk
