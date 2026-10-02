@@ -1,4 +1,4 @@
-/// AST → HIR lowering: name resolution + scope binding + type annotations
+﻿/// AST → HIR lowering: name resolution + scope binding + type annotations
 /// lowered to `Ty`.
 ///
 /// Two-pass flow:
@@ -167,6 +167,7 @@ struct FuncSig {
     extern_symbol: Option<String>,
     exported: bool,
     py_export: bool,
+    attrs: Vec<String>,
     builtin: bool,
     span: Span,
 }
@@ -408,6 +409,7 @@ impl Lowerer {
                 extern_symbol: None,
                 exported: false,
                 py_export: false,
+                attrs: Vec::new(),
                 builtin: true,
                 span: dummy_span,
             });
@@ -905,7 +907,7 @@ impl Lowerer {
                         extern_symbol: _,
                         exported: _,
                         py_export: _,
-                        attrs: _,
+                        attrs,
                         span: m_span,
                     } = m_stmt
                     {
@@ -1002,6 +1004,7 @@ impl Lowerer {
                             extern_symbol: None,
                             exported: false,
                             py_export: false,
+                            attrs: attrs.clone(),
                             builtin: false,
                             span: *m_span,
                         });
@@ -1023,6 +1026,7 @@ impl Lowerer {
                             py_export: false,
                             builtin: false,
                             body: HirBlock { stmts: Vec::new(), scope_id: 0 }, // filled in pass 2
+                            attrs: Vec::new(),
                             span: *m_span,
                         });
                     } else {
@@ -1145,6 +1149,7 @@ impl Lowerer {
                 extern_symbol,
                 exported,
                 py_export,
+                attrs,
                 span,
                 ..
             } = stmt
@@ -1369,6 +1374,7 @@ impl Lowerer {
                     extern_symbol: extern_symbol.clone(),
                     exported: *exported,
                     py_export: *py_export,
+                    attrs: attrs.clone(),
                     builtin: false,
                     span: *span,
                 });
@@ -1408,6 +1414,7 @@ impl Lowerer {
             Option<String>,
             bool,
             bool,
+            Vec<String>,
             bool,
             Span,
         )> = lowerer
@@ -1428,13 +1435,14 @@ impl Lowerer {
                     s.extern_symbol.clone(),
                     s.exported,
                     s.py_export,
+                    s.attrs.clone(),
                     s.builtin,
                     s.span,
                 )
             })
             .collect();
         let mut hir_funcs = Vec::new();
-        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, py_export, builtin, span) in
+        for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, py_export, attrs, builtin, span) in
             sigs
         {
             lowerer.scopes.push(std::collections::HashMap::new());
@@ -1498,6 +1506,7 @@ impl Lowerer {
                 py_export,
                 builtin,
                 body,
+                attrs,
                 span,
             });
         }
