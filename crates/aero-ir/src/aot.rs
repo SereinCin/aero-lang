@@ -192,7 +192,13 @@ fn emit_object(module: &Module, obj_path: &Path, opt: OptLevel, triple_str: &str
     // on Mach-O that would become `__snprintf`, but libSystem only exports
     // `_snprintf` (the C name `snprintf` + prefix). Rename it to `snprintf` so
     // the emitted Mach-O symbol is `_snprintf`, resolving against libSystem.
-    if is_macho_triple(triple_str) {
+    //
+    // Android NDK clang with --target=aarch64-linux-androidXX does NOT auto-link
+    // bionic libc (the --defsym fallback needs snprintf to already be in the
+    // symbol table, which it isn't without an explicit -lc). Renaming in IR
+    // means the linker resolves snprintf directly from bionic, no --defsym
+    // needed. The same trick works for both targets.
+    if is_macho_triple(triple_str) || triple_str.contains("android") {
         if let Some(f) = module.get_function("_snprintf") {
             f.as_global_value().set_name("snprintf");
         }
@@ -365,14 +371,16 @@ fn link(
         // Skipped for freestanding: bare-metal kernels manage stacks manually.
         cmd.arg("-Wl,--stack,67108864");
     } else if !freestanding
-        && (target.contains("linux") || target.contains("android"))
+        && target.contains("linux")
+        && !target.contains("android")
         && !is_macho_triple(target)
     {
         // The string-runtime calls `_snprintf` (the Windows CRT export name). On
-        // ELF targets the symbol is `snprintf`; alias it so Android/Linux .so and
-        // executable links resolve (GNU ld / lld both support --defsym). Mach-O
-        // is excluded: `_snprintf` is renamed to `snprintf` in emit_object, so
-        // ld64/lld resolve `_snprintf` against libSystem directly.
+        // ELF targets the symbol is `snprintf`; alias it so Linux .so and
+        // executable links resolve (GNU ld / lld both support --defsym).
+        // Mach-O and Android are excluded: both rename `_snprintf` to `snprintf`
+        // in emit_object, so the emitted symbol matches libSystem / bionic
+        // directly and no alias is needed.
         // Skipped for freestanding: `_snprintf` won't be emitted there at all.
         cmd.arg("-Wl,--defsym=_snprintf=snprintf");
     }
