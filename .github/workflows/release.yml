@@ -99,6 +99,7 @@ jobs:
         if: startsWith(matrix.os, 'macos-')
         run: |
           brew install llvm@22
+          brew link llvm@22 --force
           echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
 
       - name: Install LLVM 22 (Windows)
