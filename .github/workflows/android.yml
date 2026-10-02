@@ -44,6 +44,7 @@ jobs:
       - name: Install LLVM 22 (apt.llvm.org)
         run: |
           wget -O - https://apt.llvm.org/llvm.sh | sudo bash -s 22
+          sudo apt-get install -y libpolly-22-dev
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
       # Android NDK r25+ provides the LLVM prebuilt toolchain with bionic
@@ -84,16 +85,16 @@ jobs:
       - name: Cross-compile Android shared library
         run: |
           target/release/aero build --shared --target aarch64-linux-android --ndk "${{ steps.ndk.outputs.ndk }}" examples/export_demo.aero
-          ls -l libexport_demo.so
+          ls -l examples/libexport_demo.so
 
       - name: Verify exported symbols in lib*.so
         run: |
-          if ! llvm-nm -D --defined-only libexport_demo.so | grep -q "T add"; then
+          if ! llvm-nm -D --defined-only examples/libexport_demo.so | grep -q "T add"; then
             echo "missing export symbol 'add' in libexport_demo.so"
-            llvm-nm -D libexport_demo.so || true
+            llvm-nm -D examples/libexport_demo.so || true
             exit 1
           fi
-          if ! llvm-nm -D --defined-only libexport_demo.so | grep -q "T double"; then
+          if ! llvm-nm -D --defined-only examples/libexport_demo.so | grep -q "T double"; then
             echo "missing export symbol 'double' in libexport_demo.so"
             exit 1
           fi
@@ -101,4 +102,4 @@ jobs:
 
       - name: Verify ELF machine is AArch64
         run: |
-          readelf -h libexport_demo.so | grep -i "Machine" | grep -qi "aarch64" && echo "ELF machine: AArch64 OK"
+          readelf -h examples/libexport_demo.so | grep -i "Machine" | grep -qi "aarch64" && echo "ELF machine: AArch64 OK"
