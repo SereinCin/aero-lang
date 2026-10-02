@@ -610,6 +610,10 @@ fn cmd_android_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
         format!("--sysroot={}", sysroot.display()),
         // bionic requires position-independent code for shared libraries
         "-fPIC".to_string(),
+        // Explicitly link bionic libc; NDK clang's --target triplet disables
+        // automatic libc linkage, which makes --defsym=_snprintf=snprintf fail
+        // because `snprintf` (from bionic) isn't in the symbol table yet.
+        "-lc".to_string(),
         // Android logging API (used by aero-rt/__android_log_print)
         "-llog".to_string(),
     ];
