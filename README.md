@@ -117,11 +117,16 @@ aero clippy <file.aero>               static analysis
 
 ## Development Methodology
 
-Aero is developed through human-AI collaboration. AI assistance accounts for
-roughly 55% of the work (scaffolding, boilerplate, first drafts, and routine
-refactoring); the remaining ~45% - language and compiler design, architecture
-decisions, review, debugging, and verification - is team-led. All merged code
-is reviewed and tested by the team.
+Aero is built through human–AI collaboration — the AI is trained on our own
+toolchain and GitHub workflow to handle scaffolding, boilerplate, first drafts,
+and routine refactoring (~55% of code shipped); the remaining ~45% (language
+and compiler design, architecture decisions, review, debugging, verification)
+is team-led.
+
+All merged code passes a **deepfake-style check** — AI-generated code detection
+plus semantic consistency review — before landing. AI suggestions that violate
+project constraints (safety guarantees, performance budget, or architectural
+decisions) are rejected outright.
 
 ## Supporters
 
