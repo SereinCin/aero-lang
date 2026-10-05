@@ -118,9 +118,10 @@ aero clippy <file.aero>               static analysis
 ## Development Methodology
 
 Aero is developed through human-AI collaboration. AI assistance accounts for
-roughly 40% of the work (scaffolding, boilerplate, and first drafts); the
-remaining ~60% - language and compiler design, review, debugging, and
-verification - is team-led. All merged code is reviewed and tested by the team.
+roughly 55% of the work (scaffolding, boilerplate, first drafts, and routine
+refactoring); the remaining ~45% - language and compiler design, architecture
+decisions, review, debugging, and verification - is team-led. All merged code
+is reviewed and tested by the team.
 
 ## Supporters
 
