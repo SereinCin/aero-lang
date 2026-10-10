@@ -241,6 +241,10 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// Block expression `{ stmt1; stmt2; expr }` — evaluates all statements,
+    /// trailing expr is the block's value. Lowered to `HirExpr::Block` which
+    /// `gen_block` handles naturally.
+    Block(Vec<Stmt>, Span),
 }
 
 impl Expr {
@@ -273,6 +277,7 @@ impl Expr {
             | Expr::Logic { span, .. }
             | Expr::Asm { span, .. } => *span,
             Expr::Closure { span, .. } => *span,
+            Expr::Block(_, span) => *span,
         }
     }
 }

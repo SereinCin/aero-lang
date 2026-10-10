@@ -2040,7 +2040,22 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let body = self.parse_expr()?;
+                // Body: either `{ stmts... }` block or a single expression.
+                let body = if let Some(t) = self.peek() {
+                    if t.kind == TokenKind::LBrace {
+                        let (stmts, end_tok) = self.parse_block_with_end()?;
+                        Expr::Block(stmts, Span {
+                            line: tok.line,
+                            col: tok.col,
+                            start: tok.start,
+                            end: end_tok.end,
+                        })
+                    } else {
+                        self.parse_expr()?
+                    }
+                } else {
+                    return Err(self.eof_error("closure body"));
+                };
                 let span = Span {
                     line: tok.line,
                     col: tok.col,

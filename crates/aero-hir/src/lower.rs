@@ -2804,6 +2804,12 @@ impl Lowerer {
                     span: *span,
                 })
             }
+            Expr::Block(_, span) => {
+                return Err(LowerError::new(
+                    "block expression `{ ... }` is only valid as a closure body",
+                    *span,
+                ));
+            }
             Expr::Closure {
                 params,
                 ret,
@@ -2843,7 +2849,10 @@ impl Lowerer {
                 // Lower the body as a full block, then convert the trailing
                 // HirStmt::Expr into an explicit HirStmt::Return so codegen
                 // emits a proper return value.
-                let body_stmts = vec![Stmt::Expr((**body).clone(), *span)];
+                let body_stmts: Vec<Stmt> = match &**body {
+                    Expr::Block(stmts, _) => stmts.clone(),
+                    other => vec![Stmt::Expr(other.clone(), *span)],
+                };
                 let hir_body = self.lower_block_stmts(
                     &body_stmts,
                     Some(FnCtx { ret: hir_ret.clone() }),
