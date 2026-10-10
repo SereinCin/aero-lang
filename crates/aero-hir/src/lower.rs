@@ -1783,6 +1783,60 @@ impl Lowerer {
         }
     }
 
+    /// Lower a match sub-pattern without creating a new scope. Used for tuple
+    /// sub-patterns where any bind/enum-variant resolution should happen in the
+    /// enclosing arm's scope (which must already exist on the scope stack).
+    fn lower_match_pattern_noscope(
+        &mut self,
+        pat: &MatchPattern,
+    ) -> Result<HirMatchPattern, LowerError> {
+        match pat {
+            MatchPattern::Wildcard => Ok(HirMatchPattern::Wildcard),
+            MatchPattern::IntLit(v) => Ok(HirMatchPattern::IntLit(*v)),
+            MatchPattern::BoolLit(b) => Ok(HirMatchPattern::BoolLit(*b)),
+            MatchPattern::CharLit(c) => Ok(HirMatchPattern::CharLit(*c)),
+            MatchPattern::StrLit(s) => Ok(HirMatchPattern::StrLit(s.clone())),
+            MatchPattern::Bind(name) => {
+                let def_id = self.bind_var(name, Span { line: 0, col: 0, start: 0, end: 0 })?;
+                Ok(HirMatchPattern::Bind(name.clone(), def_id))
+            }
+            MatchPattern::EnumVariant {
+                enum_name,
+                variant,
+                bind,
+                span: pat_span,
+            } => {
+                // Resolve enum
+                let resolved_enum = match enum_name {
+                    Some(n) => n.clone(), // tuple sub-patterns require explicit Enum::Variant
+                    None => {
+                        return Err(LowerError::new(
+                            "bare enum variant in tuple pattern; use Enum::Variant to disambiguate",
+                            *pat_span,
+                        ));
+                    }
+                };
+                let hir_bind = match bind {
+                    Some(b) => Some((b.clone(), self.bind_var(b, *pat_span)?)),
+                    None => None,
+                };
+                Ok(HirMatchPattern::EnumVariant {
+                    enum_name: resolved_enum,
+                    variant: variant.clone(),
+                    bind: hir_bind,
+                    span: *pat_span,
+                })
+            }
+            MatchPattern::Tuple(pats, span) => {
+                let hir_pats: Result<Vec<_>, _> = pats
+                    .iter()
+                    .map(|p| self.lower_match_pattern_noscope(p))
+                    .collect();
+                Ok(HirMatchPattern::Tuple(hir_pats?, *span))
+            }
+        }
+    }
+
     /// Lower a block (creates a new scope). `fn_ctx` is used to reject nested
 /// function definitions inside function bodies.
     fn lower_block(
@@ -2004,6 +2058,13 @@ impl Lowerer {
                         MatchPattern::BoolLit(b) => HirMatchPattern::BoolLit(*b),
                         MatchPattern::CharLit(c) => HirMatchPattern::CharLit(*c),
                         MatchPattern::StrLit(s) => HirMatchPattern::StrLit(s.clone()),
+                        MatchPattern::Tuple(pats, span) => {
+                            let hir_pats: Result<Vec<_>, _> = pats
+                                .iter()
+                                .map(|p| self.lower_match_pattern_noscope(p))
+                                .collect();
+                            HirMatchPattern::Tuple(hir_pats?, *span)
+                        }
                         MatchPattern::Bind(name) => {
                             // Create a new scope for the arm body and bind the variable
                             let scope_id = self.new_scope();

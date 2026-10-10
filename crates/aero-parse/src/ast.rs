@@ -539,6 +539,8 @@ pub enum MatchPattern {
         bind: Option<String>,
         span: Span,
     },
+    /// Tuple pattern: `(pat1, pat2, ...)` — destructures a tuple.
+    Tuple(Vec<MatchPattern>, Span),
 }
 
 /// A whole program: a list of statements.

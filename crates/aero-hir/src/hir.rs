@@ -436,6 +436,8 @@ pub enum HirMatchPattern {
         bind: Option<(String, DefId)>,
         span: Span,
     },
+    /// Tuple pattern: `(pat1, pat2, ...)` — each sub-pattern is independent.
+    Tuple(Vec<HirMatchPattern>, Span),
 }
 
 /// HIR expression (names resolved).

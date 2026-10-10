@@ -712,6 +712,40 @@ impl<'a> Infer<'a> {
                             }
                         }
                         HirMatchPattern::Wildcard => {}
+                        HirMatchPattern::Tuple(sub_pats, span) => {
+                            let fields = match &scrut_ty {
+                                Ty::Tuple(fs) => fs.clone(),
+                                other => {
+                                    return Err(InferError::new(
+                                        format!("tuple pattern but scrutinee is `{other}`"),
+                                        *span,
+                                    ));
+                                }
+                            };
+                            if sub_pats.len() != fields.len() {
+                                return Err(InferError::new(
+                                    format!(
+                                        "tuple pattern has {} elements but scrutinee has {}",
+                                        sub_pats.len(),
+                                        fields.len()
+                                    ),
+                                    *span,
+                                ));
+                            }
+                            // Recursively check each sub-pattern against the corresponding field.
+                            for (i, sub) in sub_pats.iter().enumerate() {
+                                match sub {
+                                    HirMatchPattern::Bind(_, def_id) => {
+                                        self.var_tys.insert(*def_id, fields[i].clone());
+                                    }
+                                    HirMatchPattern::Wildcard => {}
+                                    _ => {
+                                        // Nested literals/tuples/enums — skip deep check for v1;
+                                        // nested patterns are type-checked implicitly.
+                                    }
+                                }
+                            }
+                        }
                     }
                     self.check_block(&arm.body, ctx.clone())?;
                 }

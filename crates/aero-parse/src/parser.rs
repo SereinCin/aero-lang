@@ -698,6 +698,33 @@ impl<'a> Parser<'a> {
             None => return Err(self.eof_error("expected a match pattern")),
         };
         match &tok.kind {
+            TokenKind::LParen => {
+                // Tuple pattern: `(pat1, pat2, ...)`
+                let start = self.advance().expect("LParen").clone();
+                let mut pats = Vec::new();
+                loop {
+                    if self.at(&TokenKind::RParen) {
+                        break;
+                    }
+                    pats.push(self.parse_match_pattern()?);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                let end = self.expect_kind(&TokenKind::RParen, "right paren `)` to close tuple pattern")?;
+                let span = Span {
+                    line: start.line,
+                    col: start.col,
+                    start: start.start,
+                    end: end.end,
+                };
+                if pats.len() == 1 {
+                    // `(pat)` — not a tuple, just a parenthesized pattern
+                    Ok(pats.into_iter().next().unwrap())
+                } else {
+                    Ok(MatchPattern::Tuple(pats, span))
+                }
+            }
             TokenKind::Underscore => {
                 self.advance();
                 Ok(MatchPattern::Wildcard)

@@ -211,6 +211,8 @@ impl<'a> Evaluator<'a> {
                         }
                         // Enum-variant patterns are beyond the scalar minimal scope.
                         aero_hir::hir::HirMatchPattern::EnumVariant { .. } => false,
+                        // Tuple patterns require aggregate scrutinees; const eval skips.
+                        aero_hir::hir::HirMatchPattern::Tuple(..) => false,
                     };
                     if hit {
                         return self.eval_block(&arm.body);
