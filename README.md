@@ -1,6 +1,8 @@
 # Aero
 
 A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
+> **贡献者说明：** 本仓库贡献者账号为 **SereinTeam (SereinCin)**。若您看到其他名称（如 Serein "s3r3in" 等），系 Git 客户端身份配置错误导致的显示异常。
+
 
 Current release: **1.2.5** (2026-10-11).
 
