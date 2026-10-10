@@ -150,6 +150,12 @@ pub struct Lowerer {
     /// `use` aliases per module path: module_path → list of import paths
     /// (e.g. `use a::b::C` → target `a::b::C`, imported as `C`).
     uses: std::collections::HashMap<String, Vec<Vec<String>>>,
+    /// Closure counter — generates unique `__closure_N` names for each inline
+    /// closure literal during lowering.
+    closure_counter: u32,
+    /// Closures lowered inline during `lower_expr` — each is a fully built HirFn.
+    /// Drained into the final HirProgram at the end of pass 2.
+    pending_hir_fns: Vec<HirFn>,
 }
 
 /// Signatures collected in pass 1.
@@ -362,6 +368,8 @@ impl Lowerer {
             next_scope: 0,
             module_path: String::new(),
             uses: std::collections::HashMap::new(),
+            closure_counter: 0,
+            pending_hir_fns: Vec::new(),
         };
         // Pre-pass: flatten inline modules into a flat top-level statement list
         // (hoisting `mod m { items }` to `m::item`), collect `use` aliases, unwrap
@@ -1462,6 +1470,10 @@ impl Lowerer {
                 )
             })
             .collect();
+        let sigs = sigs
+            .into_iter()
+            .filter(|(name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| !name.starts_with("__closure_"))
+            .collect::<Vec<_>>();
         let mut hir_funcs = Vec::new();
         for (name, def_id, type_params, lifetimes, trait_bounds, params, ret, is_gpu, is_const, is_extern, extern_symbol, exported, py_export, attrs, builtin, span) in
             sigs
@@ -1531,6 +1543,7 @@ impl Lowerer {
                 span,
             });
         }
+        hir_funcs.extend(lowerer.pending_hir_fns.drain(..));
         Ok(HirProgram {
             funcs: hir_funcs,
             structs: lowerer.structs,
@@ -2684,6 +2697,111 @@ impl Lowerer {
                     ret_ty: Ty::Void,
                     span: *span,
                 })
+            }
+            Expr::Closure {
+                params,
+                ret,
+                body,
+                span,
+            } => {
+                // Generate a unique anonymous function name.
+                let n = self.closure_counter;
+                self.closure_counter += 1;
+                let name = format!("__closure_{n}");
+
+                // Allocate a DefId — closures sit in the same def-id namespace
+                // as top-level functions so FnRef points at them correctly.
+                let def_id = self.funcs.len() as DefId;
+                self.func_by_name.insert(name.clone(), def_id);
+
+                // Lower param types + ret type from TypeExpr annotations.
+                let mut hir_params: Vec<(String, Ty, Span)> = Vec::new();
+                let mut param_defs: Vec<DefId> = Vec::new();
+                self.scopes.push(std::collections::HashMap::new());
+                for (pname, pty) in params {
+                    let t = self.lower_type(pty)?;
+                    let did = self.next_var;
+                    self.next_var += 1;
+                    self.scopes
+                        .last_mut()
+                        .expect("closure scope just pushed")
+                        .insert(pname.clone(), did);
+                    param_defs.push(did);
+                    hir_params.push((pname.clone(), t, *span));
+                }
+                let hir_ret = match ret {
+                    Some(te) => Some(self.lower_type(te)?),
+                    None => None,
+                };
+
+                // Lower the body as a full block, then convert the trailing
+                // HirStmt::Expr into an explicit HirStmt::Return so codegen
+                // emits a proper return value.
+                let body_stmts = vec![Stmt::Expr((**body).clone(), *span)];
+                let hir_body = self.lower_block_stmts(
+                    &body_stmts,
+                    Some(FnCtx { ret: hir_ret.clone() }),
+                )?;
+                let mut stmts = hir_body.stmts;
+                if let Some(last) = stmts.pop() {
+                    let last = match last {
+                        HirStmt::Expr(e, s) => HirStmt::Return(Some(e), s),
+                        other => other,
+                    };
+                    stmts.push(last);
+                }
+                let hir_body = HirBlock {
+                    stmts,
+                    scope_id: self.new_scope(),
+                };
+                self.scopes.pop();
+
+                // Register the FuncSig so forward references work (pass 2 defers
+                // filling top-level fn bodies, but closures are fully materialized
+                // here so their body is never filled later — we push a stub FuncSig
+                // and the real HirFn goes straight into pending_hir_fns).
+                self.funcs.push(FuncSig {
+                    name: name.clone(),
+                    def_id,
+                    type_params: Vec::new(),
+                    lifetimes: Vec::new(),
+                    trait_bounds: Vec::new(),
+                    params: hir_params.clone(),
+                    ret: hir_ret.clone(),
+                    is_gpu: false,
+                    is_const: false,
+                    is_extern: false,
+                    extern_symbol: None,
+                    exported: false,
+                    py_export: false,
+                    attrs: Vec::new(),
+                    builtin: false,
+                    span: *span,
+                });
+
+                let hir_fn = HirFn {
+                    name,
+                    def_id,
+                    type_params: Vec::new(),
+                    lifetimes: Vec::new(),
+                    trait_bounds: Vec::new(),
+                    params: hir_params,
+                    param_defs,
+                    ret: hir_ret,
+                    is_gpu: false,
+                    is_const: false,
+                    is_extern: false,
+                    extern_symbol: None,
+                    exported: false,
+                    py_export: false,
+                    builtin: false,
+                    body: hir_body,
+                    attrs: Vec::new(),
+                    span: *span,
+                };
+                self.pending_hir_fns.push(hir_fn);
+
+                Ok(HirExpr::FnRef { def_id, span: *span })
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿use aero_lex::token::{Token, TokenKind};
+use aero_lex::token::{Token, TokenKind};
 
 use crate::ast::{
     BinOp, CmpOp, EnumVariant, Expr, LogicOp, MatchArm, MatchPattern, Program, Stmt, TypeExpr,
@@ -1976,6 +1976,41 @@ impl<'a> Parser<'a> {
                 Expr::Unary {
                     op: UnOp::Neg,
                     expr: Box::new(inner),
+                    span,
+                }
+            }
+            TokenKind::Pipe => {
+                // Closure literal `|a: i64, b: i64| expr` or `|| expr`.
+                self.advance(); // consume first `|`
+                let mut params: Vec<(String, TypeExpr)> = Vec::new();
+                if !self.at(&TokenKind::Pipe) {
+                    loop {
+                        let name = self.expect_ident()?;
+                        self.expect_kind(&TokenKind::Colon, "colon `:` after closure param name")?;
+                        let ty = self.parse_type_expr()?;
+                        params.push((name, ty));
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect_kind(&TokenKind::Pipe, "closing `|` after closure params")?;
+                let ret = if self.eat(&TokenKind::Arrow) {
+                    Some(self.parse_type_expr()?)
+                } else {
+                    None
+                };
+                let body = self.parse_expr()?;
+                let span = Span {
+                    line: tok.line,
+                    col: tok.col,
+                    start: tok.start,
+                    end: body.span().end,
+                };
+                Expr::Closure {
+                    params,
+                    ret,
+                    body: Box::new(body),
                     span,
                 }
             }

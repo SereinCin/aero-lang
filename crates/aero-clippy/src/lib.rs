@@ -458,6 +458,8 @@ fn expr_uses(ctx: &mut Ctx, e: &Expr) {
                 expr_uses(ctx, op);
             }
         }
+        Expr::Closure { body, .. } => expr_uses(ctx, body),
+        _ => {}
     }
 }
 
@@ -1052,6 +1054,8 @@ fn expr_checks(ctx: &mut Ctx, e: &Expr) {
         }
         Expr::Float(..) | Expr::Bool(..) | Expr::Char(..) | Expr::ArenaLit(..) | Expr::TensorLit(.., _) => {}
         Expr::Var(..) => {}
+        Expr::Closure { body, .. } => expr_checks(ctx, body),
+        _ => {}
     }
 }
 

@@ -1,4 +1,4 @@
-﻿use crate::span::Span;
+use crate::span::Span;
 
 /// Binary arithmetic operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +231,16 @@ pub enum Expr {
         operands: Vec<Expr>,
         span: Span,
     },
+    /// Closure literal `|a: i64, b: i64| expr` (v1: no captures, params must have
+    /// type annotations, body is a single expression — no blocks, no returns).
+    /// Lowered to a fresh anonymous `fn` + `FnRef` so the rest of the pipeline
+    /// (type inference, borrowck, LLVM codegen) reuses the existing callable path.
+    Closure {
+        params: Vec<(String, TypeExpr)>,
+        ret: Option<TypeExpr>,
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -262,6 +272,7 @@ impl Expr {
             | Expr::Cmp { span, .. }
             | Expr::Logic { span, .. }
             | Expr::Asm { span, .. } => *span,
+            Expr::Closure { span, .. } => *span,
         }
     }
 }
