@@ -2,23 +2,23 @@
 
 A systems programming language that aims for Python-level development speed with C++-level performance, plus native support for AI computing.
 
-Current release: **1.2.4** (2026-10-03).
+Current release: **1.2.5** (2026-10-11).
 
 ## Quick Start
 
 ### Windows
-1. Download `aero-v1.2.4-windows-x86_64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
+1. Download `aero-v1.2.5-windows-x86_64.zip` from [Releases](https://github.com/SereinCin/aero-lang/releases)
 2. Extract to any folder, double-click `install.bat`
 3. Open a new cmd window and run `aero --help`
 
 ### Linux
 ```bash
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/install_linux.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.5/install_linux.sh | sh
 ```
 
 ### macOS (Apple Silicon & Intel)
 ```bash
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/install_macos.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.5/install_macos.sh | sh
 ```
 
 ### Build from Source
@@ -74,6 +74,10 @@ while (i < 10) {
 | `asm!` inline assembly (parser → HIR → real LLVM emit) | New in 1.2.4 |
 | `static` / `static mut` module-scope globals | New in 1.2.4 |
 | `aero install` (GitHub ecosystem) | New in 1.2.0 |
+| Closure v1 (single-expression body + `{ ... }` block body) | New in 1.2.5 |
+| Match guard expressions `if cond` | New in 1.2.5 |
+| Tuple match patterns `(a, b, c)` with guards and field binding | New in 1.2.5 |
+| Multi-file `mod` import + AOT build | New in 1.2.5 |
 
 ## Crates
 

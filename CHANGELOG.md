@@ -2,6 +2,22 @@
 
 All notable changes to Aero are documented in this file.
 
+## [1.2.5] - 2026-10-11
+
+### Added — Closures & Pattern Matching
+- **Closure v1**: |param: Type| -> Ret { body } syntax supporting both single-expression bodies and multi-statement `{ ... }` block bodies.
+- **Match guard expressions**: `match x { pattern if cond => body, ... }` — arbitrary boolean conditions after pattern match.
+- **Tuple match patterns**: `(a, b, c)` — sub-patterns recursively evaluate, field bindings auto-register in arm scope. Guards may reference bound fields.
+- **Multi-file `mod` import**: `mod foo from "./foo.aero"` — compile multi-file projects with AOT.
+- **Benchmarks Game**: nbody / fannkuch-redux / spectral-norm / binary-trees / mandelbrot — all 5 run correctly, on par with Rust / Go.
+
+### Performance
+- Mandelbrot N=2000: Aero 155ms ≈ Rust 153ms / Go 174ms (AMD Ryzen 9 9950X3D)
+
+### Fixes
+- Bare identifier in tuple sub-pattern position now maps to `Bind`, not `EnumVariant`.
+- Tuple arm lowering now creates a scope before lowering sub-patterns — fixes "variable already declared".
+- Guard expressions referencing `Bind` fields now pre-load into `self.vars` before dispatch — fixes "variable has no stack slot".
 ## [1.2.4] - 2026-10-03
 
 ### Added — P1 bare-metal line
