@@ -424,7 +424,7 @@ impl Drop for TmpDirCleanup {
 /// Both the object file and the intermediate exe live in an ASCII temp directory
 /// (msys gcc cannot handle non-ASCII paths); copied back on success.
 pub fn compile_to_exe(source: &str, exe_path: &Path, target: &str) -> Result<(), AeroError> {
-    compile_to_exe_linked(source, exe_path, &[], &[], OptLevel::default(), target, &[])
+    compile_to_exe_linked(source, exe_path, &[], &[], OptLevel::default(), target, &[], None)
 }
 
 /// AOT compilation with link config (FFI): extra libs and search paths from the `[link]` section.
@@ -436,8 +436,9 @@ pub fn compile_to_exe_linked(
     opt: OptLevel,
     target: &str,
     extra_args: &[String],
+    source_dir: Option<&Path>,
 ) -> Result<(), AeroError> {
-    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, extra_args, false)
+    compile_to_out(source, exe_path, libs, lib_paths, opt, target, false, true, None, extra_args, false, source_dir)
 }
 
 /// AOT compilation to a shared library (`-shared` output: `.so`/`.dll`/`.dylib`).
@@ -453,8 +454,9 @@ pub fn compile_to_shared(
     opt: OptLevel,
     target: &str,
     extra_args: &[String],
+    source_dir: Option<&Path>,
 ) -> Result<(), AeroError> {
-    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, None, extra_args, false)
+    compile_to_out(source, out_path, libs, lib_paths, opt, target, true, false, None, extra_args, false, source_dir)
 }
 
 /// AOT compilation to a Python C extension (`.pyd` on Windows / `.so` on Unix).
@@ -472,6 +474,7 @@ pub fn compile_to_pyext(
     opt: OptLevel,
     target: &str,
     spec: &crate::PyExtSpec,
+    source_dir: Option<&Path>,
 ) -> Result<(), AeroError> {
     compile_to_out(
         source,
@@ -485,6 +488,7 @@ pub fn compile_to_pyext(
         Some(spec),
         &[],
         false,
+        source_dir,
     )
 }
 
@@ -498,6 +502,7 @@ pub fn compile_to_obj(
     obj_path: &Path,
     opt: OptLevel,
     target: &str,
+    source_dir: Option<&Path>,
 ) -> Result<(), AeroError> {
     compile_to_out(
         source,
@@ -511,6 +516,7 @@ pub fn compile_to_obj(
         None,
         &[],
         true,
+        source_dir,
     )
 }
 
@@ -528,6 +534,7 @@ fn compile_to_out(
     py_ext: Option<&crate::PyExtSpec>,
     extra_args: &[String],
     emit_obj_only: bool,
+    source_dir: Option<&Path>,
 ) -> Result<(), AeroError> {
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AeroError {
@@ -539,7 +546,7 @@ fn compile_to_out(
     }
     let context = Context::create();
     let freestanding = is_freestanding_triple(target);
-    let module = crate::compile_pipeline_emit(&context, source, emit_main, py_ext, freestanding)?;
+    let module = crate::compile_pipeline_emit(&context, source, source_dir, emit_main, py_ext, freestanding)?;
     if std::env::var("AERO_DUMP_IR").is_ok() {
         let s = module.print_to_string();
         println!("{s}");
@@ -613,7 +620,8 @@ pub fn compile_file_to_exe(
         col: 0,
         msg: format!("cannot read file {}: {e}", source_file.display()),
     })?;
-    compile_to_exe_linked(&source, exe_path, &[], &[], opt, target, &[])
+    let dir = source_file.parent();
+    compile_to_exe_linked(&source, exe_path, &[], &[], opt, target, &[], dir)
 }
 
 /// Content-addressable build cache key for a compilation config.
@@ -643,6 +651,7 @@ pub fn compile_to_exe_cached(
     opt: OptLevel,
     env: &[(&str, &str)],
     target: &str,
+    source_dir: Option<&Path>,
 ) -> Result<bool, AeroError> {
     // Cache dir lives next to the output target (Cargo-style). Fall back to the
     // current directory when the target has no parent.
@@ -682,7 +691,7 @@ pub fn compile_to_exe_cached(
         col: 0,
         msg: format!("cannot create cache dir {}: {e}", cache_dir.display()),
     })?;
-    compile_to_exe_linked(source, &cached, libs, lib_paths, opt, target, &[])?;
+    compile_to_exe_linked(source, &cached, libs, lib_paths, opt, target, &[], source_dir)?;
     std::fs::copy(&cached, exe_path).map_err(|e| AeroError {
         phase: "AOT",
         line: 0,
@@ -725,7 +734,7 @@ mod tests {
         let triples = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android", "i686-linux-android"];
         for t in triples {
             let context = Context::create();
-            let module = crate::compile_pipeline_emit(&context, src, false, None, false).expect("pipeline");
+            let module = crate::compile_pipeline_emit(&context, src, None, false, None, false).expect("pipeline");
             let tmp = std::env::temp_dir().join(format!("aero_android_{}_test.o", t.replace('-', "_")));
             let ok = emit_object(&module, &tmp, OptLevel::O2, t);
             assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
@@ -760,7 +769,7 @@ mod tests {
         ];
         for t in triples {
             let context = Context::create();
-            let module = crate::compile_pipeline_emit(&context, src, false, None, false).expect("pipeline");
+            let module = crate::compile_pipeline_emit(&context, src, None, false, None, false).expect("pipeline");
             let tmp = std::env::temp_dir().join(format!("aero_ios_{}_test.o", t.replace('-', "_")));
             let ok = emit_object(&module, &tmp, OptLevel::O2, t);
             assert!(ok.is_ok(), "{t} object emit failed: {:?}", ok.err());
@@ -800,7 +809,7 @@ mod tests {
             api_version: 1013,
             windows: true,
         };
-        let module = crate::compile_pipeline_emit(&context, src, false, Some(&spec), false).expect("pipeline");
+        let module = crate::compile_pipeline_emit(&context, src, None, false, Some(&spec), false).expect("pipeline");
         let llvm_ir = module.print_to_string();
         let ir = llvm_ir.to_string_lossy().into_owned();
         // Keep the LLVMString alive: dropping it calls LLVMDisposeMessage, which

@@ -142,7 +142,7 @@ pub fn compile_package(root: &std::path::Path, out_exe: &std::path::Path, target
     let crates = resolve_and_lock(root)?;
     let merged = merge_source(&crates)?;
     let (libs, lib_paths) = collect_link_config(&crates)?;
-    aero_ir::aot::compile_to_exe_linked(&merged, out_exe, &libs, &lib_paths, aero_ir::aot::OptLevel::default(), target, &[])
+    aero_ir::aot::compile_to_exe_linked(&merged, out_exe, &libs, &lib_paths, aero_ir::aot::OptLevel::default(), target, &[], None)
         .map_err(|e| PmError::new(e.to_string()))
 }
 
@@ -172,6 +172,7 @@ pub fn run_package(root: &std::path::Path) -> Result<(), PmError> {
         aero_ir::aot::OptLevel::default(),
         aero_ir::aot::host_target_triple(),
         &[],
+        None,
     )
     .map_err(|e| PmError::new(e.to_string()))?;
     let status = std::process::Command::new(&exe)

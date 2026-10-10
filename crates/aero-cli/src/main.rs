@@ -194,6 +194,7 @@ fn cmd_build(argv: &[String]) -> u8 {
     let flags = parse_build_flags(argv);
     let p = Path::new(flags.path);
     if p.is_file() {
+        let source_dir = p.parent();
         let source = match std::fs::read_to_string(p) {
             Ok(s) => s,
             Err(e) => {
@@ -238,7 +239,7 @@ fn cmd_build(argv: &[String]) -> u8 {
                 p.with_extension(ext)
             };
             if flags.emit_obj {
-                return match aero_ir::aot::compile_to_obj(&source, &out, flags.opt, flags.triple) {
+                return match aero_ir::aot::compile_to_obj(&source, &out, flags.opt, flags.triple, source_dir) {
                     Ok(()) => {
                         println!("{}", out.display());
                         0
@@ -254,7 +255,7 @@ fn cmd_build(argv: &[String]) -> u8 {
                 // default linker was already switched to `ld.lld` in aot.rs for
                 // `*-none` triples, so no gcc/CRT contamination happens.
                 return match aero_ir::aot::compile_to_exe_linked(
-                    &source, &out, &[], &[], flags.opt, flags.triple, &flags.link_args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
+                    &source, &out, &[], &[], flags.opt, flags.triple, &flags.link_args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(), source_dir,
                 ) {
                     Ok(()) => {
                         // Silently ignore unused extra_link when not emit_obj —
@@ -283,7 +284,7 @@ fn cmd_build(argv: &[String]) -> u8 {
             let ext = shared_ext(flags.triple);
             let out = p.with_extension(ext);
             let extra: Vec<String> = Vec::new();
-            return match aero_ir::aot::compile_to_shared(&source, &out, &[], &[], flags.opt, flags.triple, &extra) {
+            return match aero_ir::aot::compile_to_shared(&source, &out, &[], &[], flags.opt, flags.triple, &extra, source_dir) {
                 Ok(()) => {
                     println!("{}", out.display());
                     0
@@ -305,7 +306,7 @@ fn cmd_build(argv: &[String]) -> u8 {
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
             .collect();
-        return match aero_ir::aot::compile_to_exe_cached(&source, &out, &[], &[], flags.opt, &env_refs, flags.triple) {
+        return match aero_ir::aot::compile_to_exe_cached(&source, &out, &[], &[], flags.opt, &env_refs, flags.triple, source_dir) {
             Ok(hit) => {
                 println!(
                     "{}",
@@ -627,7 +628,7 @@ fn cmd_android_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     unsafe {
         std::env::set_var("AERO_LINKER", &linker);
     }
-    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra) {
+    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra, p.parent()) {
         Ok(()) => {
             println!("{}", out.display());
             0
@@ -715,7 +716,7 @@ fn cmd_ios_shared(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     unsafe {
         std::env::set_var("AERO_LINKER", &clang);
     }
-    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra) {
+    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra, p.parent()) {
         Ok(()) => {
             println!("{}", out.display());
             0
@@ -771,7 +772,7 @@ fn cmd_cpp(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
     let ext = shared_ext(flags.triple);
     let out = p.with_extension(ext);
     let extra: Vec<String> = Vec::new();
-    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra) {
+    match aero_ir::aot::compile_to_shared(source, &out, &[], &[], flags.opt, flags.triple, &extra, p.parent()) {
         Ok(()) => {
             println!("{}", out.display());
             println!("{}", hpp.display());
@@ -842,6 +843,7 @@ fn cmd_pyext(p: &Path, source: &str, flags: &BuildFlags<'_>) -> u8 {
         flags.opt,
         flags.triple,
         &spec,
+        p.parent(),
     ) {
         Ok(()) => {
             println!("{}", out.display());
@@ -1315,7 +1317,10 @@ fn run_file(path: &str, opt: aero_ir::aot::OptLevel, _target: &str) -> u8 {
             return 1;
         }
     };
-    match aero_ir::run_source_opt(&source, opt) {
+    // Compute source directory for `mod foo;` resolution. `mod` names are
+    // resolved relative to the file that declares them.
+    let source_dir = std::path::Path::new(path).parent();
+    match aero_ir::run_source_opt_from_dir(&source, opt, source_dir) {
         Ok(()) => 0,
         Err(e) => {
             eprint!("{}", diag::render_error(&source, path, &e));
@@ -1485,7 +1490,7 @@ fn cmd_cov(file: &str) -> u8 {
     unsafe {
         std::env::set_var("AERO_COV", "1");
     }
-    let compile = aero_ir::aot::compile_to_exe_linked(&source, &exe, &[], &[], aero_ir::aot::OptLevel::O0, aero_ir::aot::host_target_triple(), &[]);
+    let compile = aero_ir::aot::compile_to_exe_linked(&source, &exe, &[], &[], aero_ir::aot::OptLevel::O0, aero_ir::aot::host_target_triple(), &[], std::path::Path::new(file).parent());
     unsafe {
         std::env::remove_var("AERO_COV");
     }
