@@ -3319,6 +3319,14 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 if is_enum {
                     return self.gen_enum_match(scrutinee, arms, *span);
                 }
+                // Tuple scrutinees dispatch to the aggregate-field code path
+                let is_tuple = matches!(&scrut_ty, Ok(Ty::Tuple(_)))
+                    || arms
+                        .iter()
+                        .any(|a| matches!(a.pattern, HirMatchPattern::Tuple(..)));
+                if is_tuple {
+                    return self.gen_tuple_match(scrutinee, arms, *span);
+                }
                 let scrut_val =
                     self.gen_value(scrutinee)?.scalar(*span, "match scrutinee")?;
                 let merge_bb = self
@@ -3722,6 +3730,310 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             bld(self.builder.build_unreachable())?;
         }
         Ok(())
+    }
+
+    /// Tuple match: `match (t1, t2) { (pat1, pat2) => ..., _ => ... }`.
+    /// Each tuple element is GEP-extracted and matched against its sub-pattern.
+    fn gen_tuple_match(
+        &mut self,
+        scrutinee: &HirExpr,
+        arms: &[HirMatchArm],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let scrut_ptr = self
+            .gen_value(scrutinee)?
+            .agg(span, "tuple match scrutinee")?;
+        let scrut_ty = self.expr_ty(scrutinee)?;
+        let elem_tys = match &scrut_ty {
+            Ty::Tuple(elems) => elems.clone(),
+            other => {
+                return Err(CodegenError {
+                    msg: format!("tuple match over non-tuple type `{other}`"),
+                    line: span.line,
+                    col: span.col,
+                });
+            }
+        };
+        let tuple_llvm = self.t(&scrut_ty, span)?;
+
+        let merge_bb = self
+            .context
+            .append_basic_block(self.cur_func, "match.end");
+        let body_bbs: Vec<_> = arms
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                self.context
+                    .append_basic_block(self.cur_func, &format!("match.arm{i}"))
+            })
+            .collect();
+        let mut merge_reachable = false;
+
+        // Build per-element LLVM pointers once; reuse across all arms.
+        let mut elem_ptrs: Vec<PointerValue<'ctx>> = Vec::new();
+        for (i, _) in elem_tys.iter().enumerate() {
+            let idx = self.i32_ty.const_int(i as u64, false);
+            let ptr = bld(unsafe {
+                self.builder.build_in_bounds_gep(
+                    tuple_llvm,
+                    scrut_ptr,
+                    &[self.i32_ty.const_zero(), idx],
+                    &format!("tuple.elem{i}"),
+                )
+            })?;
+            elem_ptrs.push(ptr);
+        }
+
+        // --- Dispatch: for each arm, compute match condition ---
+        for (i, arm) in arms.iter().enumerate() {
+            let is_last = i == arms.len() - 1;
+            let arm_span = arm.span;
+
+            // 1. Build pattern condition (without guard yet)
+            let pat_cond = match &arm.pattern {
+                HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
+                    // Always matches — true
+                    self.bool_ty.const_int(1u64, false)
+                }
+                HirMatchPattern::Tuple(sub_pats, _) => {
+                    if sub_pats.len() != elem_tys.len() {
+                        return Err(CodegenError {
+                            msg: format!(
+                                "tuple pattern has {} elements, expected {}",
+                                sub_pats.len(),
+                                elem_tys.len()
+                            ),
+                            line: arm_span.line,
+                            col: arm_span.col,
+                        });
+                    }
+                    // Pre-load all Bind sub-fields into self.vars so guard expressions
+                    // can reference them (guard is evaluated during dispatch, before we
+                    // enter the arm body).
+                    for (j, sub) in sub_pats.iter().enumerate() {
+                        if let HirMatchPattern::Bind(_, def_id) = sub {
+                            let elem_ty = &elem_tys[j];
+                            let elem_ptr = elem_ptrs[j];
+                            let elem_llvm = self.t(elem_ty, arm_span)?;
+                            let slot = bld(self.builder.build_alloca(
+                                elem_llvm, &format!("tuple.elem{j}.prebind"),
+                            ))?;
+                            if is_agg(elem_ty) {
+                                let n = aero_size(
+                                    elem_ty,
+                                    self.hir_structs,
+                                    self.hir_unions,
+                                    self.hir_enums,
+                                    &self.type_subst,
+                                );
+                                self.emit_memcpy(slot, elem_ptr, n, arm_span, &format!("tuple pre-bind elem{j}"))?;
+                            } else {
+                                let v = bld(self.builder.build_load(
+                                    elem_llvm, elem_ptr, &format!("tuple.elem{j}.preload"),
+                                ))?;
+                                bld(self.builder.build_store(slot, v))?;
+                            }
+                            self.vars.insert(*def_id, slot);
+                        }
+                    }
+                    let mut combined = self.bool_ty.const_int(1u64, false);
+                    for (j, sub) in sub_pats.iter().enumerate() {
+                        let elem_ty = &elem_tys[j];
+                        let elem_ptr = elem_ptrs[j];
+                        let sub_cond = self.gen_tuple_sub_pattern_cond(
+                            sub, elem_ptr, elem_ty, arm_span, j,
+                        )?;
+                        combined = bld(self.builder.build_and(
+                            combined, sub_cond, &format!("tuple.and.j{j}"),
+                        ))?;
+                    }
+                    combined
+                }
+                other => {
+                    return Err(CodegenError {
+                        msg: format!("non-tuple pattern `{other:?}` in tuple match arm"),
+                        line: arm_span.line,
+                        col: arm_span.col,
+                    });
+                }
+            };
+
+            // 2. AND with guard if any
+            let cond = if let Some(g) = &arm.guard {
+                let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
+                let guard_bool = bld(self.builder.build_int_compare(
+                    IntPredicate::NE,
+                    guard_val.into_int_value(),
+                    self.bool_ty.const_zero(),
+                    "guard.test",
+                ))?;
+                bld(self.builder.build_and(pat_cond, guard_bool, "tuple.guard"))?
+            } else {
+                bld(self.builder.build_int_compare(
+                    IntPredicate::NE,
+                    pat_cond,
+                    self.bool_ty.const_zero(),
+                    "tuple.pat.bool",
+                ))?
+            };
+
+            // 3. Branch
+            if is_last {
+                merge_reachable = true;
+                bld(self
+                    .builder
+                    .build_conditional_branch(cond, body_bbs[i], merge_bb))?;
+            } else {
+                let next_bb = self.context.append_basic_block(
+                    self.cur_func,
+                    &format!("match.next{i}"),
+                );
+                bld(self
+                    .builder
+                    .build_conditional_branch(cond, body_bbs[i], next_bb))?;
+                self.builder.position_at_end(next_bb);
+            }
+        }
+
+        // Safety net: fallthrough to merge
+        if !self.cur_block_terminated() {
+            merge_reachable = true;
+            bld(self.builder.build_unconditional_branch(merge_bb))?;
+        }
+
+        // --- Arm bodies: handle bindings ---
+        for (i, arm) in arms.iter().enumerate() {
+            self.builder.position_at_end(body_bbs[i]);
+            match &arm.pattern {
+                HirMatchPattern::Bind(_, def_id) => {
+                    // Bind the whole tuple into a slot
+                    let slot = bld(self.builder.build_alloca(tuple_llvm, "tuple.bind"))?;
+                    let n = aero_size(
+                        &scrut_ty,
+                        self.hir_structs,
+                        self.hir_unions,
+                        self.hir_enums,
+                        &self.type_subst,
+                    );
+                    self.emit_memcpy(slot, scrut_ptr, n, arm.span, "tuple bind")?;
+                    self.vars.insert(*def_id, slot);
+                }
+                HirMatchPattern::Tuple(sub_pats, _) => {
+                    // Bind each sub-pattern that is a Bind
+                    for (j, sub) in sub_pats.iter().enumerate() {
+                        if let HirMatchPattern::Bind(_, def_id) = sub {
+                            let elem_ty = &elem_tys[j];
+                            let elem_ptr = elem_ptrs[j];
+                            let elem_llvm = self.t(elem_ty, arm.span)?;
+                            let slot = bld(self.builder.build_alloca(
+                                elem_llvm, &format!("tuple.elem{j}.bind"),
+                            ))?;
+                            if is_agg(elem_ty) {
+                                let n = aero_size(
+                                    elem_ty,
+                                    self.hir_structs,
+                                    self.hir_unions,
+                                    self.hir_enums,
+                                    &self.type_subst,
+                                );
+                                self.emit_memcpy(slot, elem_ptr, n, arm.span, &format!("tuple elem{j} bind"))?;
+                            } else {
+                                let v = bld(self.builder.build_load(
+                                    elem_llvm, elem_ptr, &format!("tuple.elem{j}.load"),
+                                ))?;
+                                bld(self.builder.build_store(slot, v))?;
+                            }
+                            self.vars.insert(*def_id, slot);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.gen_block(&arm.body)?;
+            if !self.cur_block_terminated() {
+                merge_reachable = true;
+                bld(self.builder.build_unconditional_branch(merge_bb))?;
+            }
+        }
+
+        self.builder.position_at_end(merge_bb);
+        if !merge_reachable {
+            bld(self.builder.build_unreachable())?;
+        }
+        Ok(())
+    }
+
+    /// Helper: generate LLVM i1 condition for a single tuple element sub-pattern.
+    /// Returns an i1 (bool) value — 1 if the element matches, 0 otherwise.
+    fn gen_tuple_sub_pattern_cond(
+        &mut self,
+        pat: &HirMatchPattern,
+        elem_ptr: PointerValue<'ctx>,
+        elem_ty: &Ty,
+        span: Span,
+        field_idx: usize,
+    ) -> Result<IntValue<'ctx>, CodegenError> {
+        match pat {
+            HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
+                // Always true
+                Ok(self.bool_ty.const_int(1u64, false))
+            }
+            HirMatchPattern::IntLit(n) => {
+                if !matches!(elem_ty, Ty::I64 | Ty::I32) {
+                    return Err(self.internal_err(span, &format!(
+                        "int literal pattern on non-integer tuple element (field {field_idx})"
+                    )));
+                }
+                let elem_llvm = self.t(elem_ty, span)?;
+                let v = bld(self.builder.build_load(
+                    elem_llvm, elem_ptr, &format!("tuple.elem{field_idx}.load"),
+                ))?;
+                let pat_val = if matches!(elem_ty, Ty::I32) {
+                    self.i32_ty.const_int((*n as i32) as u64, true)
+                } else {
+                    self.i64_ty.const_int(*n as u64, true)
+                };
+                Ok(bld(self.builder.build_int_compare(
+                    IntPredicate::EQ, v.into_int_value(), pat_val,
+                    &format!("tuple.elem{field_idx}.cmp"),
+                ))?)
+            }
+            HirMatchPattern::BoolLit(b) => {
+                let elem_llvm = self.t(elem_ty, span)?;
+                let v = bld(self.builder.build_load(
+                    elem_llvm, elem_ptr, &format!("tuple.elem{field_idx}.load"),
+                ))?;
+                let pat_val = self.bool_ty.const_int(if *b { 1 } else { 0 }, false);
+                Ok(bld(self.builder.build_int_compare(
+                    IntPredicate::EQ, v.into_int_value(), pat_val,
+                    &format!("tuple.elem{field_idx}.cmp"),
+                ))?)
+            }
+            HirMatchPattern::CharLit(c) => {
+                let elem_llvm = self.t(elem_ty, span)?;
+                let v = bld(self.builder.build_load(
+                    elem_llvm, elem_ptr, &format!("tuple.elem{field_idx}.load"),
+                ))?;
+                let pat_val = self.i32_ty.const_int(*c as u64, false);
+                Ok(bld(self.builder.build_int_compare(
+                    IntPredicate::EQ, v.into_int_value(), pat_val,
+                    &format!("tuple.elem{field_idx}.cmp"),
+                ))?)
+            }
+            HirMatchPattern::StrLit(_) => {
+                return Err(self.internal_err(span,
+                    "string literal pattern not yet supported inside tuple match"));
+            }
+            HirMatchPattern::EnumVariant { .. } => {
+                return Err(self.internal_err(span,
+                    "enum variant pattern not yet supported inside tuple match"));
+            }
+            HirMatchPattern::Tuple(..) => {
+                // Nested tuple pattern — not yet supported in this pass
+                return Err(self.internal_err(span,
+                    "nested tuple pattern not yet supported"));
+            }
+        }
     }
 
     /// `?` operator: unwrap a `Result<T, E>`. On `Ok(t)` the expression evaluates to

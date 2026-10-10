@@ -1810,10 +1810,20 @@ impl Lowerer {
                 let resolved_enum = match enum_name {
                     Some(n) => n.clone(), // tuple sub-patterns require explicit Enum::Variant
                     None => {
-                        return Err(LowerError::new(
-                            "bare enum variant in tuple pattern; use Enum::Variant to disambiguate",
-                            *pat_span,
-                        ));
+                        // Bare ident in tuple sub-pattern: treat as a Bind when there's no
+                        // bind payload. If there IS a bind payload (e.g. `Variant(x)`),
+                        // it's a real enum variant — but we still can't resolve it without
+                        // a scrutinee type, so we report a clear error.
+                        if bind.is_none() {
+                            // `(a, b)` → Bind("a"), Bind("b")
+                            let def_id = self.bind_var(variant, *pat_span)?;
+                            return Ok(HirMatchPattern::Bind(variant.clone(), def_id));
+                        } else {
+                            return Err(LowerError::new(
+                                "bare enum variant in tuple pattern; use Enum::Variant to disambiguate",
+                                *pat_span,
+                            ));
+                        }
                     }
                 };
                 let hir_bind = match bind {
@@ -2059,11 +2069,30 @@ impl Lowerer {
                         MatchPattern::CharLit(c) => HirMatchPattern::CharLit(*c),
                         MatchPattern::StrLit(s) => HirMatchPattern::StrLit(s.clone()),
                         MatchPattern::Tuple(pats, span) => {
+                            // Create a new scope for tuple sub-pattern bindings.
+                            let scope_id = self.new_scope();
+                            self.scopes.push(std::collections::HashMap::new());
                             let hir_pats: Result<Vec<_>, _> = pats
                                 .iter()
                                 .map(|p| self.lower_match_pattern_noscope(p))
                                 .collect();
-                            HirMatchPattern::Tuple(hir_pats?, *span)
+                            let guard = match &arm.guard {
+                                Some(g) => Some(self.lower_expr(g)?),
+                                None => None,
+                            };
+                            let body = self.lower_block_stmts(&arm.body, fn_ctx.clone());
+                            self.scopes.pop();
+                            let body = match body {
+                                Ok(HirBlock { stmts, .. }) => HirBlock { stmts, scope_id },
+                                Err(e) => return Err(e),
+                            };
+                            hir_arms.push(HirMatchArm {
+                                pattern: HirMatchPattern::Tuple(hir_pats?, *span),
+                                guard,
+                                body,
+                                span: arm.span,
+                            });
+                            continue;
                         }
                         MatchPattern::Bind(name) => {
                             // Create a new scope for the arm body and bind the variable
