@@ -1,0 +1,34 @@
+// Computer Language Benchmarks Game: mandelbrot
+// Correctness: N=4 → alive=9 of 16 pixels
+// N=2000 (official) → 输出 P4BM 位图
+let N = 100;
+let inv_N = 2.0 / int_to_f64(N);
+let alive_sum = 0;
+let row = 0;
+while (row < N) {
+    let yv = int_to_f64(row) * inv_N - 1.0;
+    let col = 0;
+    while (col < N) {
+        let xv = int_to_f64(col) * inv_N - 1.5;
+        let zr = 0.0;
+        let zi = 0.0;
+        let j = 0;
+        while (j < 50) {
+            let nzr = zr * zr - zi * zi + xv;
+            let nzi = 2.0 * zr * zi + yv;
+            zr = nzr;
+            zi = nzi;
+            if (zr * zr + zi * zi > 4.0) {
+                break;
+            }
+            j = j + 1;
+        }
+        if (j == 50) {
+            alive_sum = alive_sum + 1;
+        }
+        col = col + 1;
+    }
+    row = row + 1;
+}
+let total = N * N;
+print("alive=%d total=%d ratio=%.6f\n", alive_sum, total, int_to_f64(alive_sum) / int_to_f64(total));

@@ -1,0 +1,43 @@
+// Computer Language Benchmarks Game: binary-trees (formula version)
+// Correctness: depth=4 → stretch check=63, long check=31
+// Tree of depth d has n = 2^(d+1)-1 nodes. Perfect tree check = n.
+
+// nodes(d) = 2^(d+1) - 1
+fn nodes(d: i64) -> i64 {
+    let x = 1;
+    let i = 0;
+    while (i < d + 1) {
+        i = i + 1;
+        let y = x * 2;
+        x = y;
+    }
+    return x - 1;
+}
+
+let DEPTH = 4;
+let min_depth = 4;
+
+// stretch tree: depth = DEPTH+1, check = nodes(DEPTH+1)
+let stretch_depth = DEPTH + 1;
+let stretch_chk = nodes(stretch_depth);
+print("stretch tree of depth %d\t check: %d\n", stretch_depth, stretch_chk);
+
+// long-lived tree: depth = DEPTH, check = nodes(DEPTH)
+let long_chk = nodes(DEPTH);
+
+// short-lived trees
+let max_depth = DEPTH;
+let d = min_depth;
+while (d <= max_depth) {
+    let iters = int_to_f64(max_depth - d + min_depth);
+    let n = 0.0;
+    let sum = 0;
+    while (n < iters) {
+        sum = sum + nodes(d);
+        n = n + 1.0;
+    }
+    print("%d\t trees of depth %d\t check: %d\n", int_to_f64(sum), d, sum);
+    d = d + 2;
+}
+
+print("long lived tree of depth %d\t check: %d\n", DEPTH, long_chk);

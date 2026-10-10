@@ -1,0 +1,100 @@
+// Computer Language Benchmarks Game: fannkuch-redux
+// Aero port from Ruby MRI-2 reference (simplified serial version)
+// N=12 expected: checksum=3968050, max_flip=28
+let N = 7;
+
+// p[0..N], s[0..N], q[0..N] all 1-indexed (p[0] unused)
+let p: Vec<i64> = Vec::new();
+let s: Vec<i64> = Vec::new();
+let q: Vec<i64> = Vec::new();
+p.push(0); s.push(0); q.push(0); // dummy for index 0
+let i = 1;
+while (i <= N) {
+    p.push(i); s.push(i); q.push(i);
+    i = i + 1;
+}
+
+let sign = 1;
+let max_flips = 0;
+let checksum = 0;
+let perm_count = 0;
+let total_perms = 1;
+i = 1;
+while (i <= N) { total_perms = total_perms * i; i = i + 1; }
+
+// process permutation: flip count
+let q1 = p[1];
+if (q1 != 1) {
+    i = 1;
+    while (i <= N) { q[i] = p[i]; i = i + 1; }
+    let flips = 1;
+    let qq = q[q1];
+    while (qq != 1) {
+        // flip q[1..q1]
+        let lo = 1;
+        let hi = q1;
+        while (lo < hi) {
+            let t = q[lo]; q[lo] = q[hi]; q[hi] = t;
+            lo = lo + 1;
+            hi = hi - 1;
+        }
+        q[q1] = q1;
+        q1 = qq;
+        qq = q[q1];
+        flips = flips + 1;
+    }
+    max_flips = flips;
+    if (sign == 1) { checksum = checksum + flips; } else { checksum = checksum - flips; }
+}
+
+// permute loop
+let perm_done = 0;
+while (perm_done < total_perms - 1) {
+    perm_done = perm_done + 1;
+    if (sign == 1) {
+        let t = p[1]; p[1] = p[2]; p[2] = t;
+        sign = -1;
+    } else {
+        let t = p[2]; p[2] = p[3]; p[3] = t;
+        sign = 1;
+        i = 3;
+        while (i <= N && s[i] == 1) {
+            s[i] = i;
+            // rotate: take p[1], shift p[2..i+1] left, put p[1] at p[i+1]
+            let t2 = p[1];
+            let j = 1;
+            while (j <= i) {
+                p[j] = p[j + 1];
+                j = j + 1;
+            }
+            p[i + 1] = t2;
+            i = i + 1;
+        }
+        if (i <= N) { s[i] = s[i] - 1; }
+    }
+    // flip count for this permutation
+    let fq1 = p[1];
+    if (fq1 != 1) {
+        i = 1;
+        while (i <= N) { q[i] = p[i]; i = i + 1; }
+        let flips = 1;
+        let fqq = q[fq1];
+        while (fqq != 1) {
+            let lo = 1;
+            let hi = fq1;
+            while (lo < hi) {
+                let t = q[lo]; q[lo] = q[hi]; q[hi] = t;
+                lo = lo + 1;
+                hi = hi - 1;
+            }
+            q[fq1] = fq1;
+            fq1 = fqq;
+            fqq = q[fq1];
+            flips = flips + 1;
+        }
+        if (flips > max_flips) { max_flips = flips; }
+        if (sign == 1) { checksum = checksum + flips; } else { checksum = checksum - flips; }
+    }
+}
+
+print("%d\nPfannkuchen(%d) = %d\n", checksum, N, max_flips);

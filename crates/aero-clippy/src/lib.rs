@@ -315,7 +315,7 @@ fn is_all_caps(s: &str) -> bool {
 
 const BUILTINS: &[&str] = &[
     "print", "len", "push", "pop", "alloc", "json_string", "json_escape", "matmul", "sqrt", "exp",
-    "log", "sin", "cos", "size", "String", "Vec", "HashMap", "HashSet", "Box", "int_to_str",
+    "log", "sin", "cos", "size", "String", "Vec", "HashMap", "HashSet", "Box", "int_to_str", "int_to_f64",
     "strlen", "strcmp", "atoi", "time", "rand",
 ];
 

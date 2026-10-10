@@ -5555,6 +5555,19 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             bld(self.builder.build_call(self.snprintf, &call_args, "itoa"))?;
                             return Ok(GenValue::Scalar(buf.into()));
                         }
+                        "int_to_f64" => {
+                            if args.len() != 1 {
+                                return Err(CodegenError {
+                                    msg: "`int_to_f64` requires 1 integer argument".to_string(),
+                                    line: span.line,
+                                    col: span.col,
+                                });
+                            }
+                            let n = self.gen_value(&args[0])?.scalar(*span, "int_to_f64 argument")?;
+                            let iv = n.into_int_value();
+                            let fv = bld(self.builder.build_signed_int_to_float(iv, self.context.f64_type(), "sitofp"))?;
+                            return Ok(GenValue::Scalar(fv.into()))
+                        }
                         "substr" => {
                             if args.len() != 3 {
                                 return Err(CodegenError {

@@ -1,0 +1,116 @@
+// Computer Language Benchmarks Game: n-body
+// Aero port of C gcc reference (Christoph Bauer)
+// Correctness: after 50M steps, energy goes from -0.169075164 to -0.169059907
+extern "C" fn sqrt(x: f64) -> f64;
+
+let pi = 3.141592653589793;
+let solar_mass = 4.0 * pi * pi;
+let days_per_year = 365.24;
+
+let x: Vec<f64> = Vec::new();
+let y: Vec<f64> = Vec::new();
+let z: Vec<f64> = Vec::new();
+let vx: Vec<f64> = Vec::new();
+let vy: Vec<f64> = Vec::new();
+let vz: Vec<f64> = Vec::new();
+let mass: Vec<f64> = Vec::new();
+
+// sun
+x.push(0.0); y.push(0.0); z.push(0.0);
+vx.push(0.0); vy.push(0.0); vz.push(0.0); mass.push(solar_mass);
+// jupiter
+x.push(4.84143144246472090); y.push(-1.16032004402742839); z.push(-0.103622044471123109);
+vx.push(1.66007664274403694e-03 * days_per_year); vy.push(7.69901118419740425e-03 * days_per_year);
+vz.push(-6.90460016972063023e-05 * days_per_year); mass.push(9.54791938424326609e-04 * solar_mass);
+// saturn
+x.push(8.34336671824457987); y.push(4.12479856412430479); z.push(-0.403523417114321381);
+vx.push(-2.76742510726862411e-03 * days_per_year); vy.push(4.99852801234917238e-03 * days_per_year);
+vz.push(2.30417297573763929e-05 * days_per_year); mass.push(2.85885980666130812e-04 * solar_mass);
+// uranus
+x.push(12.8943695621391310); y.push(-15.1111514016986312); z.push(-0.223307578892655734);
+vx.push(2.96460137564761618e-03 * days_per_year); vy.push(2.37847173959480950e-03 * days_per_year);
+vz.push(-2.96589568540237556e-05 * days_per_year); mass.push(4.36624404335156298e-05 * solar_mass);
+// neptune
+x.push(15.3796971148509165); y.push(-25.9193146099879641); z.push(0.179258772950371181);
+vx.push(2.68067772490389322e-03 * days_per_year); vy.push(1.62824170038242295e-03 * days_per_year);
+vz.push(-9.51592254519715870e-05 * days_per_year); mass.push(5.15138902046611451e-05 * solar_mass);
+
+let NBODIES = 5;
+
+// offset momentum
+let px = 0.0; let py = 0.0; let pz = 0.0;
+let k = 0;
+while (k < NBODIES) {
+    px = px + vx[k] * mass[k];
+    py = py + vy[k] * mass[k];
+    pz = pz + vz[k] * mass[k];
+    k = k + 1;
+}
+vx[0] = 0.0 - px / solar_mass;
+vy[0] = 0.0 - py / solar_mass;
+vz[0] = 0.0 - pz / solar_mass;
+
+// print initial energy
+let e = 0.0;
+let ii = 0;
+while (ii < NBODIES) {
+    e = e + 0.5 * mass[ii] * (vx[ii] * vx[ii] + vy[ii] * vy[ii] + vz[ii] * vz[ii]);
+    let jj = ii + 1;
+    while (jj < NBODIES) {
+        let dx = x[ii] - x[jj];
+        let dy = y[ii] - y[jj];
+        let dz = z[ii] - z[jj];
+        let dist = sqrt(dx * dx + dy * dy + dz * dz);
+        e = e - (mass[ii] * mass[jj]) / dist;
+        jj = jj + 1;
+    }
+    ii = ii + 1;
+}
+print("%.9f\n", e);
+
+// main loop: 50M steps of dt=0.01
+let N = 100.0;
+let n = 0.0;
+while (n < N) {
+    let i = 0;
+    while (i < NBODIES) {
+        let j = i + 1;
+        while (j < NBODIES) {
+            let dx = x[i] - x[j];
+            let dy = y[i] - y[j];
+            let dz = z[i] - z[j];
+            let dist = sqrt(dx * dx + dy * dy + dz * dz);
+            let mag = 0.01 / (dist * dist * dist);
+            vx[i] = vx[i] - dx * mass[j] * mag;
+            vy[i] = vy[i] - dy * mass[j] * mag;
+            vz[i] = vz[i] - dz * mass[j] * mag;
+            vx[j] = vx[j] + dx * mass[i] * mag;
+            vy[j] = vy[j] + dy * mass[i] * mag;
+            vz[j] = vz[j] + dz * mass[i] * mag;
+            j = j + 1;
+        }
+        x[i] = x[i] + 0.01 * vx[i];
+        y[i] = y[i] + 0.01 * vy[i];
+        z[i] = z[i] + 0.01 * vz[i];
+        i = i + 1;
+    }
+    n = n + 1.0;
+}
+
+// print final energy
+let ef = 0.0;
+let ii2 = 0;
+while (ii2 < NBODIES) {
+    ef = ef + 0.5 * mass[ii2] * (vx[ii2] * vx[ii2] + vy[ii2] * vy[ii2] + vz[ii2] * vz[ii2]);
+    let jj2 = ii2 + 1;
+    while (jj2 < NBODIES) {
+        let dx = x[ii2] - x[jj2];
+        let dy = y[ii2] - y[jj2];
+        let dz = z[ii2] - z[jj2];
+        let dist = sqrt(dx * dx + dy * dy + dz * dz);
+        ef = ef - (mass[ii2] * mass[jj2]) / dist;
+        jj2 = jj2 + 1;
+    }
+    ii2 = ii2 + 1;
+}
+print("%.9f\n", ef);

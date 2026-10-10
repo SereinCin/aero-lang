@@ -1,4 +1,4 @@
-﻿/// AST → HIR lowering: name resolution + scope binding + type annotations
+/// AST → HIR lowering: name resolution + scope binding + type annotations
 /// lowered to `Ty`.
 ///
 /// Two-pass flow:
@@ -286,6 +286,7 @@ const BUILTINS: &[(&str, &[Ty], Option<Ty>)] = &[
     ("assert_eq", &[Ty::I64, Ty::I64], None),
     ("len", &[Ty::Str], Some(Ty::I64)),
     ("int_to_str", &[Ty::I64], Some(Ty::Str)),
+    ("int_to_f64", &[Ty::I64], Some(Ty::F64)),
     ("str_free", &[Ty::Str], None),
     // String library (string system extension): slicing, parsing, search, ordering.
     ("substr", &[Ty::Str, Ty::I64, Ty::I64], Some(Ty::Str)),
@@ -1293,17 +1294,17 @@ impl Lowerer {
                         }
                     }
                     for (pname, pty, psp) in &hir_params {
-                        if !matches!(pty, Ty::I32 | Ty::I64 | Ty::Ptr(_) | Ty::Str) {
+                        if !matches!(pty, Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64 | Ty::Ptr(_) | Ty::Str) {
                             return Err(LowerError::new(
-                                format!("extern \"C\" parameter `{pname}` type `{pty}` is not C ABI compatible (only i32/i64/*T/str)"),
+                                format!("extern \"C\" parameter `{pname}` type `{pty}` is not C ABI compatible (only i32/i64/f32/f64/*T/str)"),
                                 *psp,
                             ));
                         }
                     }
                     if let Some(rt) = &ret_ty {
-                        if !matches!(rt, Ty::I32 | Ty::I64 | Ty::Ptr(_) | Ty::Void) {
+                        if !matches!(rt, Ty::I32 | Ty::I64 | Ty::F32 | Ty::F64 | Ty::Ptr(_) | Ty::Void) {
                             return Err(LowerError::new(
-                                format!("extern \"C\" return type `{rt}` is not C ABI compatible (only i32/i64/*T/void)"),
+                                format!("extern \"C\" return type `{rt}` is not C ABI compatible (only i32/i64/f32/f64/*T/void)"),
                                 *span,
                             ));
                         }

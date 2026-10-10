@@ -1,0 +1,101 @@
+// Computer Language Benchmarks Game: spectral-norm
+// Aero port — power method on symmetric matrix A
+// multiply A^T·A·u 10 times. Since A symmetric, A^T=A, so A^T·A = A^2.
+// Correctness: N=100 → 1.2742241866 (C reference)
+extern "C" fn sqrt(x: f64) -> f64;
+
+let N = 100;
+
+let u: Vec<f64> = Vec::new();
+let v: Vec<f64> = Vec::new();
+let tmp: Vec<f64> = Vec::new();
+let i = 0;
+while (i < N) {
+    u.push(1.0); v.push(0.0); tmp.push(0.0);
+    i = i + 1;
+}
+
+// compute A·u into out
+// inline helper so we avoid fn call + ownership issues
+// call pattern: first multiplyAv(u, tmp), then multiplyAv(tmp, v) → v = A^2·u
+let iter = 0;
+while (iter < 10) {
+    // v = A^T·A·u. First tmp = A·u, then v = A^T·tmp.
+// A[i][j] = 1 / (((i+j)*(i+j+1))/2 + i + 1)
+// A^T[i][j] = A[j][i] = 1 / (((i+j)*(i+j+1))/2 + j + 1)
+// tmp = A·u
+    i = 0;
+    while (i < N) {
+        let acc = 0.0;
+        let j = 0;
+        let fi = int_to_f64(i);
+        while (j < N) {
+            let a = fi + int_to_f64(j);
+            let denom = a * (a + 1.0) / 2.0 + fi + 1.0;
+            acc = acc + u[j] / denom;
+            j = j + 1;
+        }
+        tmp[i] = acc;
+        i = i + 1;
+    }
+    // v = A^T·tmp  (A^T[i][j] has +j+1 in denominator)
+    i = 0;
+    while (i < N) {
+        let acc = 0.0;
+        let j = 0;
+        while (j < N) {
+            let fi = int_to_f64(i);
+            let fj = int_to_f64(j);
+            let a = fi + fj;
+            let denom = a * (a + 1.0) / 2.0 + fj + 1.0;
+            acc = acc + tmp[j] / denom;
+            j = j + 1;
+        }
+        v[i] = acc;
+        i = i + 1;
+    }
+    // u = A^T·A·v. First tmp = A·v, then u = A^T·tmp.
+    // tmp = A·v
+    i = 0;
+    while (i < N) {
+        let acc = 0.0;
+        let j = 0;
+        let fi = int_to_f64(i);
+        while (j < N) {
+            let a = fi + int_to_f64(j);
+            let denom = a * (a + 1.0) / 2.0 + fi + 1.0;
+            acc = acc + v[j] / denom;
+            j = j + 1;
+        }
+        tmp[i] = acc;
+        i = i + 1;
+    }
+    // u = A^T·tmp
+    i = 0;
+    while (i < N) {
+        let acc = 0.0;
+        let j = 0;
+        while (j < N) {
+            let fi = int_to_f64(i);
+            let fj = int_to_f64(j);
+            let a = fi + fj;
+            let denom = a * (a + 1.0) / 2.0 + fj + 1.0;
+            acc = acc + tmp[j] / denom;
+            j = j + 1;
+        }
+        u[i] = acc;
+        i = i + 1;
+    }
+    iter = iter + 1;
+}
+
+let vBv = 0.0;
+let vv = 0.0;
+i = 0;
+while (i < N) {
+    vBv = vBv + u[i] * v[i];
+    vv = vv + v[i] * v[i];
+    i = i + 1;
+}
+
+print("%.9f\n", sqrt(vBv / vv));
