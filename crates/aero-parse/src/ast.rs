@@ -487,10 +487,12 @@ impl Stmt {
     }
 }
 
-/// One arm of a `match` expression: `pattern => { body }`.
+/// One arm of a `match` expression: `pattern [if guard] => { body }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: MatchPattern,
+    /// Optional guard expression: `pattern if expr => body`
+    pub guard: Option<Box<Expr>>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }

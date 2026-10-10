@@ -3344,8 +3344,33 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
 
                     match &arm.pattern {
                         HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
-                            // Always matches: branch directly to arm body
-                            bld(self.builder.build_unconditional_branch(body_bbs[i]))?;
+                            // Always matches — unless a guard narrows it.
+                            if let Some(g) = &arm.guard {
+                                let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
+                                let cond = bld(self.builder.build_int_compare(
+                                    IntPredicate::NE,
+                                    guard_val.into_int_value(),
+                                    self.bool_ty.const_zero(),
+                                    "guard.test",
+                                ))?;
+                                if is_last {
+                                    merge_reachable = true;
+                                    bld(self.builder.build_conditional_branch(
+                                        cond, body_bbs[i], merge_bb,
+                                    ))?;
+                                } else {
+                                    let next_bb = self.context.append_basic_block(
+                                        self.cur_func,
+                                        &format!("match.next{i}"),
+                                    );
+                                    bld(self.builder.build_conditional_branch(
+                                        cond, body_bbs[i], next_bb,
+                                    ))?;
+                                    self.builder.position_at_end(next_bb);
+                                }
+                            } else {
+                                bld(self.builder.build_unconditional_branch(body_bbs[i]))?;
+                            }
                         }
                         pattern => {
                             let cond = match pattern {
@@ -3400,6 +3425,19 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                                     ))?
                                 }
                                 _ => unreachable!(),
+                            };
+                            // AND the pattern-match condition with any guard.
+                            let cond = if let Some(g) = &arm.guard {
+                                let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
+                                let guard_bool = bld(self.builder.build_int_compare(
+                                    IntPredicate::NE,
+                                    guard_val.into_int_value(),
+                                    self.bool_ty.const_zero(),
+                                    "guard.test",
+                                ))?;
+                                bld(self.builder.build_and(cond, guard_bool, "match.guard"))?
+                            } else {
+                                cond
                             };
                             if is_last {
                                 // Last non-wildcard arm: no-match goes to merge
@@ -3521,12 +3559,36 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             let is_last = i == arms.len() - 1;
             match &arm.pattern {
                 HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
-                    // Always matches: branch directly to the arm body. Any later
-                    // arms are unreachable (the wildcard already matched), so stop
-                    // emitting the dispatch chain here - generating more instructions
-                    // on this now-terminated block would corrupt the LLVM IR.
-                    bld(self.builder.build_unconditional_branch(body_bbs[i]))?;
-                    break;
+                    // Always matches — unless a guard narrows it.
+                    if let Some(g) = &arm.guard {
+                        let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
+                        let cond = bld(self.builder.build_int_compare(
+                            IntPredicate::NE,
+                            guard_val.into_int_value(),
+                            self.bool_ty.const_zero(),
+                            "guard.test",
+                        ))?;
+                        if is_last {
+                            merge_reachable = true;
+                            bld(self.builder.build_conditional_branch(
+                                cond, body_bbs[i], merge_bb,
+                            ))?;
+                        } else {
+                            let next_bb = self.context.append_basic_block(
+                                self.cur_func,
+                                &format!("match.next{i}"),
+                            );
+                            bld(self.builder.build_conditional_branch(
+                                cond, body_bbs[i], next_bb,
+                            ))?;
+                            self.builder.position_at_end(next_bb);
+                        }
+                    } else {
+                        // No guard: wildcard fully consumes the scrutinee,
+                        // later arms are unreachable — stop the dispatch chain.
+                        bld(self.builder.build_unconditional_branch(body_bbs[i]))?;
+                        break;
+                    }
                 }
                 HirMatchPattern::EnumVariant { variant, .. } => {
                     let vidx = def.find_variant(variant).ok_or_else(|| {
@@ -3542,6 +3604,19 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         pat,
                         "enum.cmp",
                     ))?;
+                    // AND the variant-tag match with any guard.
+                    let cond = if let Some(g) = &arm.guard {
+                        let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
+                        let guard_bool = bld(self.builder.build_int_compare(
+                            IntPredicate::NE,
+                            guard_val.into_int_value(),
+                            self.bool_ty.const_zero(),
+                            "guard.test",
+                        ))?;
+                        bld(self.builder.build_and(cond, guard_bool, "enum.guard"))?
+                    } else {
+                        cond
+                    };
                     if is_last {
                         merge_reachable = true;
                         bld(self

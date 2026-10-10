@@ -2009,6 +2009,11 @@ impl Lowerer {
                             let scope_id = self.new_scope();
                             self.scopes.push(std::collections::HashMap::new());
                             let def_id = self.bind_var(name, arm.span)?;
+                            // Lower guard in the same scope so it can reference the binding.
+                            let guard = match &arm.guard {
+                                Some(g) => Some(self.lower_expr(g)?),
+                                None => None,
+                            };
                             let body = self.lower_block_stmts(&arm.body, fn_ctx.clone());
                             self.scopes.pop();
                             let body = match body {
@@ -2017,6 +2022,7 @@ impl Lowerer {
                             };
                             hir_arms.push(HirMatchArm {
                                 pattern: HirMatchPattern::Bind(name.clone(), def_id),
+                                guard,
                                 body,
                                 span: arm.span,
                             });
@@ -2107,6 +2113,11 @@ impl Lowerer {
                                     ));
                                 }
                             };
+                            // Lower guard in the same scope so it can reference the payload binding.
+                            let guard = match &arm.guard {
+                                Some(g) => Some(self.lower_expr(g)?),
+                                None => None,
+                            };
                             let body = self.lower_block_stmts(&arm.body, fn_ctx.clone());
                             self.scopes.pop();
                             let body = match body {
@@ -2120,22 +2131,27 @@ impl Lowerer {
                                     bind: bind_def,
                                     span: *pat_span,
                                 },
+                                guard,
                                 body,
                                 span: arm.span,
                             });
                             continue;
                         }
                     };
-                    // Non-binding patterns: just lower the body in the current scope
+                    // Non-binding patterns: lower guard + body in a fresh scope.
                     let scope_id = self.new_scope();
                     self.scopes.push(std::collections::HashMap::new());
+                    let guard = match &arm.guard {
+                        Some(g) => Some(self.lower_expr(g)?),
+                        None => None,
+                    };
                     let body = self.lower_block_stmts(&arm.body, fn_ctx.clone());
                     self.scopes.pop();
                     let body = match body {
                         Ok(HirBlock { stmts, .. }) => HirBlock { stmts, scope_id },
                         Err(e) => return Err(e),
                     };
-                    hir_arms.push(HirMatchArm { pattern, body, span: arm.span });
+                    hir_arms.push(HirMatchArm { pattern, guard, body, span: arm.span });
                 }
                 Ok(HirStmt::Match { scrutinee, arms: hir_arms, span: *span })
             }

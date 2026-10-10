@@ -1,4 +1,4 @@
-﻿/// HIR (High-level Intermediate Representation) — a semantics-oriented
+/// HIR (High-level Intermediate Representation) — a semantics-oriented
 /// intermediate representation.
 ///
 /// Differences from the AST:
@@ -405,6 +405,8 @@ pub enum HirStmt {
 #[derive(Debug, Clone)]
 pub struct HirMatchArm {
     pub pattern: HirMatchPattern,
+    /// Optional guard: pattern must match AND guard must be true
+    pub guard: Option<HirExpr>,
     pub body: HirBlock,
     pub span: Span,
 }

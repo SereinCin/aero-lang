@@ -652,10 +652,23 @@ impl<'a> Parser<'a> {
                 .map(|t| (t.line, t.col, t.start))
                 .ok_or_else(|| self.eof_error("expected a match pattern"))?;
             let pat = self.parse_match_pattern()?;
+            // Optional guard: `pattern if expr => body`
+            let guard = if let Some(t) = self.peek() {
+                if t.kind == TokenKind::If {
+                    self.advance();
+                    let g = self.parse_expr()?;
+                    Some(Box::new(g))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             self.expect_kind(&TokenKind::FatArrow, "`=>`")?;
             let (body, arm_end) = self.parse_block_with_end()?;
             arms.push(MatchArm {
                 pattern: pat,
+                guard,
                 body,
                 span: Span {
                     line: pat_start.0,
