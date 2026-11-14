@@ -10608,7 +10608,7 @@ _ => {
         }
 
         // Otherwise: the first argument must be a string format string.
-        let fmt = match first {
+        let fmt_raw = match first {
             HirExpr::StrLit(s, _) => s.clone(),
             other => {
                 let sp = other.span();
@@ -10619,7 +10619,9 @@ _ => {
                 });
             }
         };
-
+        // Rewrite %d → %lld because Aero always passes integer arguments as i64.
+        // Skip %% (escaped literal %), %ld (already long), %lld, %llu, %lx etc.
+        let fmt = Self::rewrite_printf_fmt(&fmt_raw);
         let fmt_ptr = self.global_string(&fmt)?;
         let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
         call_args.push(fmt_ptr.into());
@@ -10638,6 +10640,69 @@ _ => {
             }
         }
         Ok(call_args)
+    }
+
+    /// Rewrite printf-format string: `%d`/`%i`/`%u`/`%x`/`%X`/`%o` → `%lld`/`%llu`/`%llx`...
+    /// because Aero's `marshal_print_value` always coerces integer arguments to i64
+    /// and passes them through the C variadic ABI. C's `%d` reads only 4 bytes (int),
+    /// so we must widen the format specifier to `l`-prefixed on the wire.
+    /// Skips `%%` (escaped literal %), already-long `%ld`/`%lld`, etc.
+    fn rewrite_printf_fmt(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                let start = i;
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'%' {
+                    out.push_str(&s[start..=i]);
+                    i += 1;
+                    continue;
+                }
+                // Flags: -, +, (space), #, 0
+                while i < bytes.len() && matches!(bytes[i], b'-' | b'+' | b' ' | b'#' | b'0') { i += 1; }
+                // Width (digits or *)
+                while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+                if i < bytes.len() && bytes[i] == b'*' { i += 1; }
+                // Precision (.digits or .*)
+                if i < bytes.len() && bytes[i] == b'.' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+                    if i < bytes.len() && bytes[i] == b'*' { i += 1; }
+                }
+                // Length modifiers: h hh l ll z j t
+                while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'z' | b'j' | b't') { i += 1; }
+                // Conversion specifier
+                let conv = if i < bytes.len() { bytes[i] } else { b'\0' };
+                let mut piece = String::from_utf8_lossy(&bytes[start..=i]).to_string();
+                // Rewrite integer conversions to 64-bit regardless of original length modifier.
+                // %d/%i → %lld, %u → %llu, %x/%X → %llx, %o → %llo
+                // This handles Windows LLP64 where %ld is still 32-bit, and Linux/macOS
+                // LP64 where %ld happens to be 64-bit — consistent everywhere.
+                if conv == b'd' || conv == b'i' || conv == b'u' || conv == b'x' || conv == b'X' || conv == b'o' {
+                    // before_conv contains everything up to (but not including) the conversion char.
+                    // Strip any existing length modifier (h, hh, l, ll, z, j, t), then inject "ll".
+                    let mut before_conv = &piece[..piece.len()-1];
+                    // Remove trailing length modifier chars
+                    while !before_conv.is_empty() {
+                        let last = before_conv.as_bytes()[before_conv.len()-1];
+                        if matches!(last, b'h' | b'l' | b'z' | b'j' | b't') {
+                            before_conv = &before_conv[..before_conv.len()-1];
+                        } else {
+                            break;
+                        }
+                    }
+                    piece = format!("{}ll{}", before_conv, conv as char);
+                }
+                out.push_str(&piece);
+                i += 1;
+            } else {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        out
     }
 
     /// `format(fmt, args...) -> str` (stdlib formatting, Phase 11.2):

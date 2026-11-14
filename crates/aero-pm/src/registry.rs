@@ -154,10 +154,19 @@ impl Registry {
 }
 
 fn default_root() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".aero").join("registry")
-    } else {
-        PathBuf::from("aero-registry")
+    // Prefer HOME (POSIX: macOS / Linux). On Windows HOME is usually unset,
+    // fallback to USERPROFILE. Final fallback: relative "aero-registry".
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .or_else(|| std::env::var_os("HOMEDRIVE").zip(std::env::var_os("HOMEPATH"))
+            .map(|(d, p)| {
+                let mut s = d;
+                s.push(p);
+                s
+            }));
+    match home {
+        Some(h) => PathBuf::from(h).join(".aero").join("registry"),
+        None => PathBuf::from("aero-registry"),
     }
 }
 
