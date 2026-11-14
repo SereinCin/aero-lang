@@ -2,13 +2,50 @@
 
 All notable changes to Aero are documented in this file.
 
+## [1.2.6] - 2026-11-14
+
+Patch release. Scope is strictly fixes — no new language surface.
+
+### Fixed
+- **`print("%d", i64)` truncation** (user-reported). `%d` / `%i` / `%u` / `%x` / `%X` / `%o`
+  are rewritten to 64-bit length modifiers before the call, so 64-bit values are no
+  longer truncated to 32 bits. Windows LLP64 makes this mandatory — `long` is 32-bit there.
+- **`aero ls` always empty on Windows**: registry root now falls back to `%USERPROFILE%`
+  and then `%HOMEDRIVE%%HOMEPATH%` when `HOME` is unset.
+- **`--target` silently ignored the OS part**: a cross-OS triple on the host linker now
+  fails with a clear `AOT` error and exit code 1 instead of emitting a host binary.
+  `--emit-obj` remains the escape hatch for freestanding objects.
+- **Closure bodies required a trailing `;`**: a block may now end with a bare expression
+  (Rust-style tail expression), with or without the semicolon.
+- **Closure capture produced `internal error: variable has no stack slot`**: capturing an
+  outer variable is now rejected during lowering with an actionable message.
+- **`aero bench` measured dead code**: the generated harness now inserts
+  `asm("", "~{memory}")` after each call so O2 dead-code elimination cannot remove the
+  benchmarked body.
+- **Bare `aero run` in a package printed usage**: it now defaults to the current directory,
+  like `aero build`. Bare `aero test` without a `tests/` directory is a no-op success
+  rather than exit code 2.
+- **Clippy false positive on trailing `return`**: the trailing-return style rule was
+  removed; `return expr;` at the end of a block is allowed.
+
+### Documentation
+- Added `docs/api/`: language API reference, embedding/ABI reference, HTTP API guide and
+  registry protocol.
+- `as f64` type errors now point at the `int_to_f64(x)` builtin.
+- Removed the never-implemented `mod foo from "..."` syntax from the docs.
+- `asm!` corrected to `asm(...)` (call syntax, no `!`).
+- README version and release URLs moved to 1.2.6.
+
+### Tooling
+- `scripts/verify.ps1`: 11 assertions (P0-1 … P0-11), zero arguments, exit 0 only when
+  all pass.
+
 ## [1.2.5] - 2026-10-11
 
 ### Added — Closures & Pattern Matching
 - **Closure v1**: |param: Type| -> Ret { body } syntax supporting both single-expression bodies and multi-statement `{ ... }` block bodies.
 - **Match guard expressions**: `match x { pattern if cond => body, ... }` — arbitrary boolean conditions after pattern match.
 - **Tuple match patterns**: `(a, b, c)` — sub-patterns recursively evaluate, field bindings auto-register in arm scope. Guards may reference bound fields.
-- **Multi-file `mod` import**: `mod foo from "./foo.aero"` — compile multi-file projects with AOT.
 - **Benchmarks Game**: nbody / fannkuch-redux / spectral-norm / binary-trees / mandelbrot — all 5 run correctly, on par with Rust / Go.
 
 ### Performance
@@ -36,7 +73,7 @@ All notable changes to Aero are documented in this file.
   `volatile_store` generate LLVM volatile loads and stores; `atomic_*` emit
   `atomicrmw` / `cmpxchg`; `fence` / `fence_acq` / `fence_rel` emit the
   corresponding LLVM fences.
-- **`asm!` inline assembly** (P1.4). Parser → HIR → lower → typecheck →
+- **`asm(...)` inline assembly** (P1.4). Parser → HIR → lower → typecheck →
   codegen. Constraints validated, illegal `memory` constraint converted to a
   clear error telling the user to write `~{memory}`. The codegen bypasses
   inkwell's `build_indirect_call` (which crashes on Windows with empty args)

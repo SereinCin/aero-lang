@@ -6,7 +6,7 @@ It looks like Python — no `fn main`, top-level statements — and compiles thr
 LLVM to native code. The output can be a standalone executable, a C shared
 library, or a Python C extension you can `pip install`.
 
-[中文文档](https://serein.ren/cn/aero/docs/) · [README 中文版](README.zh-CN.md)
+[中文文档](https://serein.ren/cn/aero/docs/) · [README 中文版](README.zh-CN.md) · Current release: **1.2.6**
 
 [![release](https://img.shields.io/github/v/release/SereinCin/aero-lang?label=release)](https://github.com/SereinCin/aero-lang/releases)
 [![license](https://img.shields.io/github/license/SereinCin/aero-lang)](LICENSE)
@@ -14,6 +14,7 @@ library, or a Python C extension you can `pip install`.
 [![docs](https://img.shields.io/badge/docs-serein.ren-2f6feb)](https://serein.ren/en/aero/docs/)
 
 ---
+
 
 ```aero
 fn fib(n: i64) -> i64 {
@@ -51,11 +52,11 @@ Written up front so you don't spend two hours debugging first:
 - `HashMap` keys must be `i64`
 - A C function **cannot return `char*`**, and structs **cannot be passed by value**. Handle-based libraries (sqlite3, zlib) work; SDL/X11-style ones don't
 - No async, no threads, no macros, no function pointers
-- `Tensor` is `matmul` only. Autograd and the operator library aren't wired up
+- `Tensor` has elementwise ops, `matmul`, BLAS Level-1 and reductions, but **no autograd** and no `transpose`
 
 ## Install
 
-**Windows** — grab `aero-v1.2.5-windows-x86_64.zip`, extract, run `install.bat`,
+**Windows** — grab `aero-v1.2.6-windows-x86_64.zip`, extract, run `install.bat`,
 then open a **new** terminal:
 
 ```console
@@ -65,7 +66,7 @@ aero --version
 **Linux / macOS**
 
 ```bash
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.5/install_linux.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.6/install_linux.sh | sh
 aero --version
 ```
 
