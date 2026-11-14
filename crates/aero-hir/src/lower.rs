@@ -2816,6 +2816,24 @@ impl Lowerer {
                 body,
                 span,
             } => {
+                // P0-4: detect captured (free) variables *before* lowering —
+                // closures are lowered to standalone anonymous functions with
+                // no environment pointer, so capturing outer locals would only
+                // surface as a confusing "variable has no stack slot" at
+                // codegen time. A clear lowering-time error is better.
+                let param_names: std::collections::HashSet<&str> =
+                    params.iter().map(|(n, _)| n.as_str()).collect();
+                let mut free_vars: Vec<String> = Vec::new();
+                collect_closure_free_vars(body, &param_names, &mut free_vars);
+                if let Some(captured) = free_vars.first() {
+                    return Err(LowerError::new(
+                        format!(
+                            "closures cannot capture outer-scope variables (not yet supported); `{captured}` is bound in the enclosing scope"
+                        ),
+                        *span,
+                    ));
+                }
+
                 // Generate a unique anonymous function name.
                 let n = self.closure_counter;
                 self.closure_counter += 1;
@@ -3027,5 +3045,158 @@ fn stmt_body(stmt: &Stmt) -> &[Stmt] {
     match stmt {
         Stmt::FnDef { body, .. } => body,
         _ => unreachable!("caller guaranteed a FnDef"),
+    }
+}
+
+/// Recursively walk an AST expression tree collecting every `Expr::Var` name
+/// that is *not* in `param_names`. Used to detect closure captures early so
+/// we can emit a clear lowering-time error instead of a confusing codegen panic.
+fn collect_closure_free_vars(
+    expr: &Expr,
+    param_names: &std::collections::HashSet<&str>,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expr::Var(name, _) => {
+            if !param_names.contains(name.as_str()) && !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } | Expr::Logic { lhs, rhs, .. } => {
+            collect_closure_free_vars(lhs, param_names, out);
+            collect_closure_free_vars(rhs, param_names, out);
+        }
+        Expr::Unary { expr, .. } | Expr::Deref { target: expr, .. } | Expr::Borrow { target: expr, .. }
+        | Expr::Try { target: expr, .. } | Expr::Cast { target: expr, .. } => {
+            collect_closure_free_vars(expr, param_names, out);
+        }
+        Expr::Call { args, .. } => {
+            // `callee` is a bare String — not an Expr, nothing to walk there.
+            for a in args {
+                collect_closure_free_vars(a, param_names, out);
+            }
+        }
+        Expr::PathCall { args, .. } | Expr::MethodCall { args, .. } => {
+            for a in args {
+                collect_closure_free_vars(a, param_names, out);
+            }
+        }
+        Expr::Index { target, index, .. } => {
+            collect_closure_free_vars(target, param_names, out);
+            collect_closure_free_vars(index, param_names, out);
+        }
+        Expr::Field { target, .. } => collect_closure_free_vars(target, param_names, out),
+        Expr::Tuple(elts, _) | Expr::Array(elts, _) => {
+            for e in elts {
+                collect_closure_free_vars(e, param_names, out);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            // Nested closure — recurse into its body (captures are cumulative).
+            collect_closure_free_vars(body, param_names, out);
+        }
+        Expr::Block(stmts, _) => {
+            for s in stmts {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, v) in fields {
+                collect_closure_free_vars(v, param_names, out);
+            }
+        }
+        Expr::EnumLit { arg, .. } => {
+            if let Some(a) = arg {
+                collect_closure_free_vars(a, param_names, out);
+            }
+        }
+        Expr::Asm { operands, .. } => {
+            for op in operands {
+                collect_closure_free_vars(op, param_names, out);
+            }
+        }
+        // Atoms with no variables to walk.
+        Expr::Int(..) | Expr::Float(..) | Expr::Bool(..) | Expr::Str(..) | Expr::Char(..)
+        | Expr::ArenaLit(..) | Expr::TensorLit(..) => {}
+    }
+}
+
+fn collect_closure_free_vars_from_stmt(
+    stmt: &Stmt,
+    param_names: &std::collections::HashSet<&str>,
+    out: &mut Vec<String>,
+) {
+    match stmt {
+        Stmt::Let { init, .. } => collect_closure_free_vars(init, param_names, out),
+        Stmt::Expr(e, _) => collect_closure_free_vars(e, param_names, out),
+        Stmt::Return(Some(e), _) => collect_closure_free_vars(e, param_names, out),
+        Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
+        Stmt::Print(args, _) => {
+            for a in args {
+                collect_closure_free_vars(a, param_names, out);
+            }
+        }
+        Stmt::Assign { value, .. } | Stmt::AssignField { value, .. } | Stmt::AssignIndex { value, .. }
+        | Stmt::AssignDeref { value, .. } => collect_closure_free_vars(value, param_names, out),
+        Stmt::If { cond, then_body, else_body, .. } => {
+            collect_closure_free_vars(cond, param_names, out);
+            for s in then_body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+            for s in else_body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            collect_closure_free_vars(cond, param_names, out);
+            for s in body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::Loop { body, .. } => {
+            for s in body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::For { iter, body, .. } => {
+            collect_closure_free_vars(iter, param_names, out);
+            for s in body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::Match { scrutinee, arms, .. } => {
+            collect_closure_free_vars(scrutinee, param_names, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_closure_free_vars(g, param_names, out);
+                }
+                for s in &arm.body {
+                    collect_closure_free_vars_from_stmt(s, param_names, out);
+                }
+            }
+        }
+        Stmt::FnDef { body, .. } => {
+            for s in body {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::ModDef { items, .. } => {
+            for s in items {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::ImplBlock { methods, .. } => {
+            for s in methods {
+                collect_closure_free_vars_from_stmt(s, param_names, out);
+            }
+        }
+        Stmt::StructDef { .. }
+        | Stmt::EnumDef { .. }
+        | Stmt::UnionDef { .. }
+        | Stmt::TraitDef { .. }
+        | Stmt::ConstDef { .. }
+        | Stmt::Pub(..)
+        | Stmt::ModFile { .. }
+        | Stmt::UseDecl { .. } => {}
     }
 }

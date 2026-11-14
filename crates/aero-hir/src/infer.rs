@@ -2323,7 +2323,8 @@ impl<'a> Infer<'a> {
                 let Ty::Dyn { trait_name } = ty else {
                     return Err(InferError::new(
                         format!(
-                            "`as` only casts to a `dyn Trait` type for now, got `{ty}`"
+                            "`as` only casts to a `dyn Trait` type for now, got `{ty}`. \
+                             For numeric conversion use the builtin `int_to_f64(x)` (i64 -> f64)"
                         ),
                         *span,
                     ));

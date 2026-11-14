@@ -79,8 +79,10 @@ fn main() {
             if args.len() > 2 {
                 cmd_run(&args[2..])
             } else {
-                eprintln!("missing argument.\n{USAGE}");
-                2
+                // P0-7: bare `aero run` inside a package now defaults to the
+                // current directory, matching `aero build` / `aero test`.
+                let default = [".".to_string()];
+                cmd_run(&default)
             }
         }
         Some("build") => {
@@ -107,7 +109,16 @@ fn main() {
         },
         Some("test") => match args.get(2) {
             Some(file) => cmd_test_file(file),
-            None => cmd_test_dir("tests"),
+            None => {
+                // P0-7: bare `aero test` in a package without a `tests/`
+                // directory is a no-op success, not an error.
+                if std::path::Path::new("tests").is_dir() {
+                    cmd_test_dir("tests")
+                } else {
+                    println!("no tests to run (no `tests` directory)");
+                    0
+                }
+            }
         },
         Some("bench") => {
             if args.len() > 2 {

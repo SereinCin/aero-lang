@@ -1183,14 +1183,18 @@ impl<'a> Parser<'a> {
                 }),
             }
         } else {
-            let end = self.expect_kind(&TokenKind::Semi, "semicolon `;`")?;
-            let start = lhs.span();
-            let span = Span {
-                line: start.line,
-                col: start.col,
-                start: start.start,
-                end: end.end,
-            };
+            // P0-3: tail expression — semicolon is optional when the next
+            // token is `}` (end of a block). This lets closure bodies and
+            // function bodies end with a bare expression, Rust-style.
+            let span = lhs.span();
+            if !self.eat(&TokenKind::Semi) {
+                if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBrace)) {
+                    return Err(self.error_at_current(&format!(
+                        "expected semicolon `;`, found {}",
+                        self.peek().map(|t| t.kind.describe()).unwrap_or("EOF")
+                    )));
+                }
+            }
             Ok(Stmt::Expr(lhs, span))
         }
     }
@@ -1486,6 +1490,11 @@ impl<'a> Parser<'a> {
 
     /// Parse `{ stmt* }`; returns the statement list and the closing brace
     /// token (used to record the span end).
+    ///
+    /// The *last* statement may be a bare expression without a trailing
+    /// semicolon (Rust convention — the tail expression is the block's value).
+    /// This is handled by `parse_expr_stmt` which relaxes the semicolon
+    /// requirement when the next token is `}`.
     fn parse_block_with_end(&mut self) -> Result<(Vec<Stmt>, Token), ParseError> {
         self.expect_kind(&TokenKind::LBrace, "left brace `{`")?;
         let mut stmts = Vec::new();

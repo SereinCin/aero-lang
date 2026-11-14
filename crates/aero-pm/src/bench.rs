@@ -98,6 +98,12 @@ pub fn collect_benches_from_source(source: &str) -> Result<Vec<String>, PmError>
 /// Build the AOT source for one bench: original code plus a tight loop that
 /// calls `bench()` `iterations` times. The loop counter uses a unique name so it
 /// cannot collide with user identifiers.
+///
+/// P0-6: a black-box optimization barrier (volatile empty inline asm with
+/// `~{memory}` clobber) is inserted after every `bench()` call. This prevents
+/// LLVM's O2+ DCE pass from eliding `bench()` bodies that have no observable
+/// side-effects — without it, `aero bench` reports the cost of an empty loop,
+/// not the cost of the actual bench case.
 fn harness(bench: &str, source: &str, iterations: u64, tid: u32) -> String {
     let mut out = source.to_string();
     if !out.ends_with('\n') {
@@ -107,6 +113,7 @@ fn harness(bench: &str, source: &str, iterations: u64, tid: u32) -> String {
         "let _bench_i{tid} = {iterations};\n\
          while (_bench_i{tid} > 0) {{\n    \
              {bench}();\n    \
+             asm(\"\", \"~{{memory}}\");\n    \
              _bench_i{tid} = _bench_i{tid} - 1;\n\
          }}\n"
     ));

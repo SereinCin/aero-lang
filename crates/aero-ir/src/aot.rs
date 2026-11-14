@@ -300,6 +300,68 @@ pub(crate) fn is_freestanding_triple(target: &str) -> bool {
     target.contains("-none") || target.contains("unknown-none")
 }
 
+/// Whether the host can *link* a binary for `target`. LLVM can emit object files
+/// for any supported triple, but producing a final executable / shared library
+/// requires a system linker that understands the target OS ABI.
+///
+/// Allowed cases:
+///  - freestanding (`*-none`) — no linker needed when `--emit-obj`, and `ld.lld`
+///    is always available for those who do link
+///  - host triple exactly
+///  - same OS family as the host (e.g. Linux host → Linux target of any arch;
+///    Windows host → Windows target) — the default `gcc` already handles this
+///
+/// Denied: cross-OS builds (Windows → Linux, Linux → Windows, anything → macOS)
+/// because the host linker has no CRT / start files for the foreign OS.
+/// `--emit-obj` is the escape hatch — it produces an object file without linking.
+fn host_can_link_target(target: &str) -> Result<(), AeroError> {
+    let host = host_target_triple();
+    if target == host {
+        return Ok(());
+    }
+    if is_freestanding_triple(target) {
+        return Ok(());
+    }
+    // Android has NDK cross-link; handled via `--ndk`. For the common case we
+    // allow because the NDK toolchain is explicit (`--ndk <path>`).
+    if target.contains("android") {
+        return Ok(());
+    }
+    let host_os = host.split('-').nth(2).unwrap_or("");
+    let target_os = target.split('-').nth(2).unwrap_or("");
+    // Match OS family: "windows-gnu" / "windows-msvc" → "windows";
+    // "linux-gnu" / "linux-musl" → "linux"; "apple-darwin" → "darwin".
+    let host_family = if host_os.contains("windows") {
+        "windows"
+    } else if host_os.contains("linux") {
+        "linux"
+    } else if host_os.contains("darwin") || host_os.contains("apple") {
+        "darwin"
+    } else {
+        host_os
+    };
+    let target_family = if target_os.contains("windows") {
+        "windows"
+    } else if target_os.contains("linux") {
+        "linux"
+    } else if target_os.contains("darwin") || target_os.contains("apple") {
+        "darwin"
+    } else {
+        target_os
+    };
+    if host_family == target_family {
+        return Ok(());
+    }
+    Err(AeroError {
+        phase: "AOT",
+        line: 0,
+        col: 0,
+        msg: format!(
+            "cannot cross-link from `{host}` to `{target}`: host linker ({host_family}) has no CRT/startup for `{target_family}`. Use `--emit-obj` for a freestanding object file, or install a cross-toolchain and set AERO_LINKER."
+        ),
+    })
+}
+
 /// Link an object file into an executable (or shared library) with the system linker.
 ///
 /// The linker is chosen via the `AERO_LINKER` env var, defaulting to `gcc` for
@@ -543,6 +605,13 @@ fn compile_to_out(
             col: 0,
             msg: format!("cannot create output directory {}: {e}", parent.display()),
         })?;
+    }
+    // P0-2: reject cross-OS target triples early so `--target linux-gnu` on
+    // Windows fails with a clear error instead of silently producing a PE file.
+    // `emit_obj_only` (--emit-obj) bypasses this check — object files can be
+    // produced for any supported triple without a host linker.
+    if !emit_obj_only {
+        host_can_link_target(target)?;
     }
     let context = Context::create();
     let freestanding = is_freestanding_triple(target);

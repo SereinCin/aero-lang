@@ -103,7 +103,9 @@ pub const RULE_CATALOG: &[(&str, Category, Severity, &str)] = &[
     ("empty_enum", Category::Correctness, Severity::Warning, "enum has no variants"),
     ("empty_match", Category::Correctness, Severity::Warning, "`match` has no arms"),
     ("unreachable_after_return", Category::Correctness, Severity::Warning, "code is unreachable"),
-    ("needless_return_at_end", Category::Correctness, Severity::Style, "unnecessary trailing `return`"),
+    // The trailing-return style rule was removed in 1.2.6 — Aero allows tail
+    // expressions without `return`, so `return expr;` at block end is the
+    // author's explicit choice and should not be flagged.
     ("useless_else_after_return", Category::Correctness, Severity::Warning, "`else` is useless after a `return`"),
     ("self_assignment", Category::Correctness, Severity::Error, "variable assigned to itself"),
     ("redundant_boolean", Category::Correctness, Severity::Style, "redundant comparison to `true`/`false`"),
@@ -756,9 +758,6 @@ fn lint_block_checks(ctx: &mut Ctx, body: &[Stmt]) {
         }
     }
     if let Some(last) = body.last() {
-        if let Stmt::Return(Some(..), span) = last {
-            emit(ctx, "needless_return_at_end", span.line, span.col, "unnecessary trailing `return`".into(), Some("drop the `return`; the last expression is the value".into()));
-        }
         if let Stmt::Continue(span) = last {
             emit(ctx, "unnecessary_restart", span.line, span.col, "redundant `continue` at end of a loop".into(), Some("remove it".into()));
         }
@@ -1239,8 +1238,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalogue_has_100_rules() {
-        assert!(CATALOG_COUNT >= 100, "catalogue must have >=100 rules; has {CATALOG_COUNT}");
+    fn catalogue_has_minimum_rules() {
+        // 1.2.6 removed the trailing-return style rule, so the floor is 99.
+        assert!(CATALOG_COUNT >= 99, "catalogue must have >=99 rules; has {CATALOG_COUNT}");
         // Every catalog code must also exist exactly once (unique ids).
         let mut codes: Vec<String> = RULE_CATALOG.iter().map(|(c, _, _, _)| c.to_string()).collect();
         let uniq: HashSet<String> = codes.drain(..).collect();
@@ -1284,9 +1284,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_needless_return_and_reachability() {
+    fn allows_trailing_return_and_flags_reachability() {
         let d = lint("fn a() -> i64 { let x = 1; return 1; }\nfn b() -> i64 { return 1; let dead = 2; }");
-        assert!(d.iter().any(|x| x.code == "needless_return_at_end"));
+        // 1.2.6: trailing `return` at block end is allowed, not reported.
+        assert!(!d.iter().any(|x| x.code == "needless_return_at_end"));
         assert!(d.iter().any(|x| x.code == "unreachable_after_return"));
     }
 
