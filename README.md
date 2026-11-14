@@ -89,7 +89,8 @@ cargo build --release
 | Targets | Windows / Linux / macOS, x86_64 and arm64; three `*-unknown-none` bare-metal targets |
 
 Experimental — don't build anything you care about on these: bare metal, tensor,
-`--cpp` bindings, module support beyond inline `mod name { }`.
+`--cpp` bindings, module support beyond inline `mod name { }`, and the package
+manager's remote ecosystem (the local registry is fine).
 
 ## Layout
 
