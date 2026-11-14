@@ -1519,6 +1519,30 @@ impl Lowerer {
                 // does not collide with the main scope (also id 0).
                 let mut body = lowered?;
                 body.scope_id = lowerer.new_scope();
+                // Rust-style tail expression: `fn f(a: i64) -> i64 { a + 1 }` returns
+                // `a + 1`. Before this, a trailing expression was evaluated and dropped,
+                // so the function silently returned zero.
+                let returns_value = matches!(&ret, Some(t) if *t != Ty::Void);
+                // `extern "C" fn` declarations have no body — the symbol is resolved at
+                // link time — so the missing-return check must not apply to them.
+                if returns_value && !is_extern {
+                    if matches!(body_ast.last(), Some(Stmt::TailExpr(..))) {
+                        if let Some(HirStmt::Expr(e, sp)) = body.stmts.pop() {
+                            body.stmts.push(HirStmt::Return(Some(e), sp));
+                        }
+                    }
+                    // A non-void function with no `return` anywhere (and no tail value)
+                    // used to compile and silently return zero — reject it instead.
+                    if !body.stmts.iter().any(stmt_contains_return) {
+                        return Err(LowerError::new(
+                            format!(
+                                "function `{name}` has return type `{}` but its body never returns a value; add a `return` or end the body with an expression",
+                                ret.as_ref().map(|t| format!("{t:?}")).unwrap_or_default()
+                            ),
+                            span,
+                        ));
+                    }
+                }
                 body
             };
             lowerer.scopes.pop();
@@ -1570,6 +1594,9 @@ impl Lowerer {
                 "bool" => Ok(Ty::Bool),
                 "str" => Ok(Ty::Str),
                 "String" => Ok(Ty::String),
+                // Explicit void return type: `fn f() -> void`. Equivalent to
+                // omitting the return type annotation.
+                "void" => Ok(Ty::Void),
                 // Magic higher-order parameter placeholders used in the stdlib's
                 // iterator-algorithm stubs (see std.aero `_filter_impl`, `_map_impl`,
                 // `_reduce_impl`). Each one lowers to a concrete `Ty::Fn` so Aero's
@@ -1997,7 +2024,7 @@ impl Lowerer {
                 }
                 Ok(HirStmt::Print(hir_args, *span))
             }
-            Stmt::Expr(expr, span) => {
+            Stmt::Expr(expr, span) | Stmt::TailExpr(expr, span) => {
                 let e = self.lower_expr(expr)?;
                 Ok(HirStmt::Expr(e, *span))
             }
@@ -2821,10 +2848,10 @@ impl Lowerer {
                 // no environment pointer, so capturing outer locals would only
                 // surface as a confusing "variable has no stack slot" at
                 // codegen time. A clear lowering-time error is better.
-                let param_names: std::collections::HashSet<&str> =
-                    params.iter().map(|(n, _)| n.as_str()).collect();
+                let mut bound: std::collections::HashSet<String> =
+                    params.iter().map(|(n, _)| n.clone()).collect();
                 let mut free_vars: Vec<String> = Vec::new();
-                collect_closure_free_vars(body, &param_names, &mut free_vars);
+                collect_closure_free_vars(body, &mut bound, &self.func_by_name, &mut free_vars);
                 if let Some(captured) = free_vars.first() {
                     return Err(LowerError::new(
                         format!(
@@ -2878,7 +2905,19 @@ impl Lowerer {
                 let mut stmts = hir_body.stmts;
                 if let Some(last) = stmts.pop() {
                     let last = match last {
-                        HirStmt::Expr(e, s) => HirStmt::Return(Some(e), s),
+                        HirStmt::Expr(e, s) => {
+                            // A trailing expression is the closure's return value, so
+                            // an explicit return type is required — inference cannot
+                            // recover it here and silently treating the closure as
+                            // `-> void` produces a confusing error at the call site.
+                            if hir_ret.is_none() {
+                                return Err(LowerError::new(
+                                    "closure body returns a value but the closure has no return type; annotate it, e.g. `|x: i64| -> i64 { ... }`",
+                                    *span,
+                                ));
+                            }
+                            HirStmt::Return(Some(e), s)
+                        }
                         other => other,
                     };
                     stmts.push(last);
@@ -3048,71 +3087,110 @@ fn stmt_body(stmt: &Stmt) -> &[Stmt] {
     }
 }
 
+/// Does this statement (or any nested block / match arm) contain a `return`?
+/// Used to reject non-void functions that can never produce a value, which used
+/// to compile and silently return zero.
+fn stmt_contains_return(s: &HirStmt) -> bool {
+    match s {
+        HirStmt::Return(..) => true,
+        HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.stmts.iter().any(stmt_contains_return)
+                || else_body.stmts.iter().any(stmt_contains_return)
+        }
+        HirStmt::While { body, .. } | HirStmt::Loop { body, .. } | HirStmt::For { body, .. } => {
+            body.stmts.iter().any(stmt_contains_return)
+        }
+        HirStmt::Match { arms, .. } => arms
+            .iter()
+            .any(|a| a.body.stmts.iter().any(stmt_contains_return)),
+        _ => false,
+    }
+}
+
 /// Recursively walk an AST expression tree collecting every `Expr::Var` name
-/// that is *not* in `param_names`. Used to detect closure captures early so
+/// that is *not* in `bound`. Used to detect closure captures early so
 /// we can emit a clear lowering-time error instead of a confusing codegen panic.
 fn collect_closure_free_vars(
     expr: &Expr,
-    param_names: &std::collections::HashSet<&str>,
+    bound: &mut std::collections::HashSet<String>,
+    known_fns: &std::collections::HashMap<String, DefId>,
     out: &mut Vec<String>,
 ) {
     match expr {
         Expr::Var(name, _) => {
-            if !param_names.contains(name.as_str()) && !out.contains(name) {
+            if !bound.contains(name.as_str()) && !out.contains(name) {
                 out.push(name.clone());
             }
         }
         Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } | Expr::Logic { lhs, rhs, .. } => {
-            collect_closure_free_vars(lhs, param_names, out);
-            collect_closure_free_vars(rhs, param_names, out);
+            collect_closure_free_vars(lhs, bound, known_fns, out);
+            collect_closure_free_vars(rhs, bound, known_fns, out);
         }
         Expr::Unary { expr, .. } | Expr::Deref { target: expr, .. } | Expr::Borrow { target: expr, .. }
         | Expr::Try { target: expr, .. } | Expr::Cast { target: expr, .. } => {
-            collect_closure_free_vars(expr, param_names, out);
+            collect_closure_free_vars(expr, bound, known_fns, out);
         }
-        Expr::Call { args, .. } => {
-            // `callee` is a bare String — not an Expr, nothing to walk there.
+        Expr::Call { callee, args, .. } => {
+            // A call whose callee is neither a known function nor a bound name
+            // refers to an outer-scope closure/function-pointer variable, i.e. a
+            // capture (lowering would turn it into an indirect call on that var).
+            if !bound.contains(callee.as_str())
+                && !known_fns.contains_key(callee.as_str())
+                && !out.contains(callee)
+            {
+                out.push(callee.clone());
+            }
             for a in args {
-                collect_closure_free_vars(a, param_names, out);
+                collect_closure_free_vars(a, bound, known_fns, out);
             }
         }
-        Expr::PathCall { args, .. } | Expr::MethodCall { args, .. } => {
+        Expr::PathCall { args, .. } => {
             for a in args {
-                collect_closure_free_vars(a, param_names, out);
+                collect_closure_free_vars(a, bound, known_fns, out);
+            }
+        }
+        Expr::MethodCall { recv, args, .. } => {
+            collect_closure_free_vars(recv, bound, known_fns, out);
+            for a in args {
+                collect_closure_free_vars(a, bound, known_fns, out);
             }
         }
         Expr::Index { target, index, .. } => {
-            collect_closure_free_vars(target, param_names, out);
-            collect_closure_free_vars(index, param_names, out);
+            collect_closure_free_vars(target, bound, known_fns, out);
+            collect_closure_free_vars(index, bound, known_fns, out);
         }
-        Expr::Field { target, .. } => collect_closure_free_vars(target, param_names, out),
+        Expr::Field { target, .. } => collect_closure_free_vars(target, bound, known_fns, out),
         Expr::Tuple(elts, _) | Expr::Array(elts, _) => {
             for e in elts {
-                collect_closure_free_vars(e, param_names, out);
+                collect_closure_free_vars(e, bound, known_fns, out);
             }
         }
         Expr::Closure { body, .. } => {
             // Nested closure — recurse into its body (captures are cumulative).
-            collect_closure_free_vars(body, param_names, out);
+            collect_closure_free_vars(body, bound, known_fns, out);
         }
         Expr::Block(stmts, _) => {
             for s in stmts {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Expr::StructLit { fields, .. } => {
             for (_, v) in fields {
-                collect_closure_free_vars(v, param_names, out);
+                collect_closure_free_vars(v, bound, known_fns, out);
             }
         }
         Expr::EnumLit { arg, .. } => {
             if let Some(a) = arg {
-                collect_closure_free_vars(a, param_names, out);
+                collect_closure_free_vars(a, bound, known_fns, out);
             }
         }
         Expr::Asm { operands, .. } => {
             for op in operands {
-                collect_closure_free_vars(op, param_names, out);
+                collect_closure_free_vars(op, bound, known_fns, out);
             }
         }
         // Atoms with no variables to walk.
@@ -3123,71 +3201,77 @@ fn collect_closure_free_vars(
 
 fn collect_closure_free_vars_from_stmt(
     stmt: &Stmt,
-    param_names: &std::collections::HashSet<&str>,
+    bound: &mut std::collections::HashSet<String>,
+    known_fns: &std::collections::HashMap<String, DefId>,
     out: &mut Vec<String>,
 ) {
     match stmt {
-        Stmt::Let { init, .. } => collect_closure_free_vars(init, param_names, out),
-        Stmt::Expr(e, _) => collect_closure_free_vars(e, param_names, out),
-        Stmt::Return(Some(e), _) => collect_closure_free_vars(e, param_names, out),
+        Stmt::Let { name, init, .. } => {
+            // Walk the initializer first, then bind the new local so later uses
+            // inside the closure body are not mistaken for captures.
+            collect_closure_free_vars(init, bound, known_fns, out);
+            bound.insert(name.clone());
+        }
+        Stmt::Expr(e, _) | Stmt::TailExpr(e, _) => collect_closure_free_vars(e, bound, known_fns, out),
+        Stmt::Return(Some(e), _) => collect_closure_free_vars(e, bound, known_fns, out),
         Stmt::Return(None, _) | Stmt::Break(..) | Stmt::Continue(..) => {}
         Stmt::Print(args, _) => {
             for a in args {
-                collect_closure_free_vars(a, param_names, out);
+                collect_closure_free_vars(a, bound, known_fns, out);
             }
         }
         Stmt::Assign { value, .. } | Stmt::AssignField { value, .. } | Stmt::AssignIndex { value, .. }
-        | Stmt::AssignDeref { value, .. } => collect_closure_free_vars(value, param_names, out),
+        | Stmt::AssignDeref { value, .. } => collect_closure_free_vars(value, bound, known_fns, out),
         Stmt::If { cond, then_body, else_body, .. } => {
-            collect_closure_free_vars(cond, param_names, out);
+            collect_closure_free_vars(cond, bound, known_fns, out);
             for s in then_body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
             for s in else_body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::While { cond, body, .. } => {
-            collect_closure_free_vars(cond, param_names, out);
+            collect_closure_free_vars(cond, bound, known_fns, out);
             for s in body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::Loop { body, .. } => {
             for s in body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::For { iter, body, .. } => {
-            collect_closure_free_vars(iter, param_names, out);
+            collect_closure_free_vars(iter, bound, known_fns, out);
             for s in body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::Match { scrutinee, arms, .. } => {
-            collect_closure_free_vars(scrutinee, param_names, out);
+            collect_closure_free_vars(scrutinee, bound, known_fns, out);
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    collect_closure_free_vars(g, param_names, out);
+                    collect_closure_free_vars(g, bound, known_fns, out);
                 }
                 for s in &arm.body {
-                    collect_closure_free_vars_from_stmt(s, param_names, out);
+                    collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
                 }
             }
         }
         Stmt::FnDef { body, .. } => {
             for s in body {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::ModDef { items, .. } => {
             for s in items {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::ImplBlock { methods, .. } => {
             for s in methods {
-                collect_closure_free_vars_from_stmt(s, param_names, out);
+                collect_closure_free_vars_from_stmt(s, bound, known_fns, out);
             }
         }
         Stmt::StructDef { .. }

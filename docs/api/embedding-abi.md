@@ -27,7 +27,7 @@ aero build <file.aero | dir> [flags]
 其他子命令：
 
 ```
-aero run   <file|pkg> [-O0..-O3]
+aero run   <file|pkg> [-O0..-O3]   （只接受宿主 triple；`--target` 非宿主会报错）
 aero check <file|pkg>       解析/类型/借用/LLVM 校验，不执行
 aero test  [file]           默认跑 tests/ 下全部
 aero bench <file> [--iterations N] [--samples N]
@@ -41,6 +41,10 @@ aero ls
 aero registry
 aero lsp | --lsp
 ```
+
+> `aero build` / `aero run` 的未知 `-`/`--` 选项、缺少值的选项（如裸 `--target`）、多余的位置参数
+> 现在都是硬错误（退出码 2）。1.2.5 及之前会静默忽略，`--sharedd` 这类拼写错误因此会悄悄产出宿主
+> 可执行文件。
 
 ### 1.1 跨平台链接约束（1.2.6 新增）
 

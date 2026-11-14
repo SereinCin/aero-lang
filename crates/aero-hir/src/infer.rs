@@ -758,6 +758,15 @@ impl<'a> Infer<'a> {
                     *span,
                 )),
                 Some(fctx) => match (&fctx.ret, value) {
+                    // `-> void` is the explicit spelling of "no return value".
+                    (Some(Ty::Void), None) => Ok(()),
+                    (Some(Ty::Void), Some(_)) => Err(InferError::new(
+                        format!(
+                            "function `{}` returns `void`, so `return` cannot carry a value",
+                            fctx.name
+                        ),
+                        *span,
+                    )),
                     (Some(ret_ty), Some(v)) => {
                         let v_ty = self.infer_expr(v)?;
                         self.unify(
@@ -1634,12 +1643,26 @@ impl<'a> Infer<'a> {
                     )),
                 }
             }
-            HirExpr::Unary { expr, span, .. } => {
+            HirExpr::Unary { op, expr, span } => {
                 let ty = self.infer_expr(expr)?;
-                let v = self.fresh_var();
-                self.unify(&ty, &v, *span, "unary minus operand")?;
-                self.require_numeric(&ty, *span, "unary minus operand")?;
-                Ok(ty)
+                match op {
+                    // `~x` — bitwise NOT (integer only).
+                    aero_parse::ast::UnOp::BitNot => {
+                        self.require_int(&ty, *span, "bitwise negation operand")?;
+                        Ok(ty)
+                    }
+                    // `!x` — logical NOT (boolean only).
+                    aero_parse::ast::UnOp::Not => {
+                        self.require_bool(&ty, *span, "logical negation operand")?;
+                        Ok(Ty::Bool)
+                    }
+                    aero_parse::ast::UnOp::Neg => {
+                        let v = self.fresh_var();
+                        self.unify(&ty, &v, *span, "unary minus operand")?;
+                        self.require_numeric(&ty, *span, "unary minus operand")?;
+                        Ok(ty)
+                    }
+                }
             }
             HirExpr::Binary { op, lhs, rhs, span } => {
                 let l = self.infer_expr(lhs)?;
@@ -2605,6 +2628,9 @@ impl<'a> Infer<'a> {
                 Ok(e)
             }
             (Ty::Arena(n), Ty::Arena(m)) if n == m => Ok(e),
+            (Ty::Void, Ty::Void) => Ok(e),
+            // Two trait objects unify iff they name the same trait.
+            (Ty::Dyn { trait_name: t1 }, Ty::Dyn { trait_name: t2 }) if t1 == t2 => Ok(e),
             (Ty::Fn(p1, r1), Ty::Fn(p2, r2)) if p1.len() == p2.len() => {
                 for (x, y) in p1.iter().zip(p2.iter()) {
                     self.unify(x, y, span, context)?;

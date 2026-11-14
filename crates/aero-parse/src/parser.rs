@@ -787,15 +787,23 @@ impl<'a> Parser<'a> {
                         bind,
                         span: span_of(&tok),
                     })
-                } else {
-                    // Bare variant name (resolved against the scrutinee's enum type by
-                    // lowering); a bare name is never a plain binding pattern in Aero.
+                } else if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+                {
+                    // Bare UpperCamelCase name → enum variant (resolved against the
+                    // scrutinee's enum type by lowering).
                     Ok(MatchPattern::EnumVariant {
                         enum_name: None,
                         variant: name.clone(),
                         bind: None,
                         span: span_of(&tok),
                     })
+                } else {
+                    // Bare snake_case name → irrefutable binding pattern, e.g. `n => { ... }`.
+                    Ok(MatchPattern::Bind(name.clone()))
                 }
             }
             other => Err(ParseError {
@@ -1183,9 +1191,8 @@ impl<'a> Parser<'a> {
                 }),
             }
         } else {
-            // P0-3: tail expression — semicolon is optional when the next
-            // token is `}` (end of a block). This lets closure bodies and
-            // function bodies end with a bare expression, Rust-style.
+            // P0-3: tail expression — a bare expression right before `}` is the
+            // block's value (Rust-style), so it is a distinct statement kind.
             let span = lhs.span();
             if !self.eat(&TokenKind::Semi) {
                 if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBrace)) {
@@ -1194,6 +1201,7 @@ impl<'a> Parser<'a> {
                         self.peek().map(|t| t.kind.describe()).unwrap_or("EOF")
                     )));
                 }
+                return Ok(Stmt::TailExpr(lhs, span));
             }
             Ok(Stmt::Expr(lhs, span))
         }
@@ -1202,6 +1210,11 @@ impl<'a> Parser<'a> {
     fn parse_let(&mut self) -> Result<Stmt, ParseError> {
         let start = self.advance().expect("already checked for `let`");
         let mut_ = self.eat(&TokenKind::Mut);
+        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+            return Err(self.error_at_current(
+                "tuple destructuring in `let` is not supported yet; bind the tuple to one name and read elements with `t.0`, `t.1`, ...",
+            ));
+        }
         let name = self.expect_ident()?;
         let ty_ann = if self.eat(&TokenKind::Colon) {
             Some(self.parse_type_expr()?)
@@ -1370,6 +1383,11 @@ impl<'a> Parser<'a> {
                     }
                 }
                 let end = self.expect_kind(&TokenKind::RParen, "right paren `)`")?;
+                if self.at(&TokenKind::Arrow) {
+                    return Err(self.error_at_current(
+                        "function-pointer types are not supported in type annotations yet; declare a named `fn` and pass it by name instead",
+                    ));
+                }
                 let span = Span {
                     line: tok.line,
                     col: tok.col,
@@ -2025,6 +2043,73 @@ impl<'a> Parser<'a> {
                 Expr::Unary {
                     op: UnOp::Neg,
                     expr: Box::new(inner),
+                    span,
+                }
+            }
+            TokenKind::Tilde => {
+                self.advance();
+                let inner = self.parse_expr_bp(70)?;
+                let span = Span {
+                    line: tok.line,
+                    col: tok.col,
+                    start: tok.start,
+                    end: inner.span().end,
+                };
+                Expr::Unary {
+                    op: UnOp::BitNot,
+                    expr: Box::new(inner),
+                    span,
+                }
+            }
+            TokenKind::Bang => {
+                self.advance();
+                let inner = self.parse_expr_bp(70)?;
+                let span = Span {
+                    line: tok.line,
+                    col: tok.col,
+                    start: tok.start,
+                    end: inner.span().end,
+                };
+                Expr::Unary {
+                    op: UnOp::Not,
+                    expr: Box::new(inner),
+                    span,
+                }
+            }
+            TokenKind::OrOr => {
+                // Zero-parameter closure: `|| -> T { ... }` / `|| expr`.
+                // The lexer folds the two pipes into one `OrOr` token.
+                self.advance();
+                let ret = if self.eat(&TokenKind::Arrow) {
+                    Some(self.parse_type_expr()?)
+                } else {
+                    None
+                };
+                let body = if let Some(t) = self.peek() {
+                    if t.kind == TokenKind::LBrace {
+                        let (stmts, end_tok) = self.parse_block_with_end()?;
+                        Expr::Block(stmts, Span {
+                            line: tok.line,
+                            col: tok.col,
+                            start: tok.start,
+                            end: end_tok.end,
+                        })
+                    } else {
+                        self.parse_expr()?
+                    }
+                } else {
+                    return Err(self.eof_error("closure body"));
+                };
+                let span = Span {
+                    line: tok.line,
+                    col: tok.col,
+                    start: tok.start,
+                    end: body.span().end,
+                };
+                Expr::Closure {
+                    params: Vec::new(),
+                    ret,
+                    body: Box::new(body),
                     span,
                 }
             }

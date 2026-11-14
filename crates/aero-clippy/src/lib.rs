@@ -475,7 +475,7 @@ fn stmt_uses(ctx: &mut Ctx, st: &Stmt) {
         }
         Stmt::Return(Some(e), _) => expr_uses(ctx, e),
         Stmt::Return(None, _) => {}
-        Stmt::Expr(e, _) => expr_uses(ctx, e),
+        Stmt::Expr(e, _) | Stmt::TailExpr(e, _) => expr_uses(ctx, e),
         Stmt::Print(args, _) => {
             for a in args {
                 expr_uses(ctx, a);
@@ -810,6 +810,9 @@ fn stmt_checks(ctx: &mut Ctx, st: &Stmt) {
                 expr_checks(ctx, a);
             }
         }
+        // A trailing expression is the block's value, so a pure expression there is
+        // meaningful (`{ x + 1 }`) and must not be flagged as a no-op statement.
+        Stmt::TailExpr(e, _) => expr_checks(ctx, e),
         Stmt::Expr(e, span) => {
             if expr_has_no_effect(e) {
                 emit(ctx, "void_expr_statement", span.line, span.col, "expression statement has no effect".into(), Some("remove the statement or assign its result".into()));

@@ -688,9 +688,9 @@ pub fn compile<'ctx>(
         }
         // extern aliases must not collide with symbols the codegen declares (printf/abort)
         let fn_ty = match &f.ret {
+            Some(Ty::Void) | None => context.void_type().fn_type(&param_tys, false),
             Some(t) => llvm_ty(context, t, f.span, &empty_subst, &program.structs, &program.unions, &program.enums)?
                 .fn_type(&param_tys, false),
-            None => context.void_type().fn_type(&param_tys, false),
         };
         // Reuse existing LLVM function when the symbol name is already declared
         // (e.g. two extern "C" functions aliased to the same C symbol). This
@@ -2437,15 +2437,15 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         if !self.cur_block_terminated() {
             self.gen_drop_all_live(f.body.scope_id)?;
             match &f.ret {
+                Some(Ty::Void) | None => {
+                    bld(self.builder.build_return(None))?;
+                }
                 Some(t) => {
                     // A missing trailing `return` leaves a block open, so emit a zero value.
                     // Aggregates (str/String/Vec/struct/enum) have no integer form, so taking
                     // the int variant here would trip an inkwell assertion.
                     let zero = self.t(t, f.span)?.const_zero();
                     bld(self.builder.build_return(Some(&zero)))?;
-                }
-                None => {
-                    bld(self.builder.build_return(None))?;
                 }
             }
         }
@@ -2513,12 +2513,12 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             );
         }
         let fn_ty = match &f.ret {
+            Some(Ty::Void) | None => self.context.void_type().fn_type(&param_tys, false),
             Some(t) => {
                 let inst = substitute(t, &subst);
                 llvm_ty(self.context, &inst, f.span, &empty_subst, self.hir_structs, self.hir_unions, self.hir_enums)?
                     .fn_type(&param_tys, false)
             }
-            None => self.context.void_type().fn_type(&param_tys, false),
         };
         let func = self.module.add_function(&mono_name(&f.name, &type_args), fn_ty, None);
         self.instance_funcs.insert((fn_def_id, type_args), func);
@@ -4233,8 +4233,6 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 let elem_ty = self.t(elem, span)?;
                 let arr_ty = self.t(ty, span)?;
                 for (i, e) in elems.iter().enumerate() {
-                    let v = self.gen_value(e)?.scalar(span, what)?;
-                    let v = self.coerce(v, &elem_ty, span, what)?;
                     let idx = self.i32_ty.const_int(i as u64, false);
                     let slot = bld(unsafe {
                         self.builder.build_in_bounds_gep(
@@ -4244,7 +4242,15 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             "aelem",
                         )
                     })?;
-                    bld(self.builder.build_store(slot, v))?;
+                    if is_agg(elem) {
+                        // Aggregate element (struct/enum/array/tuple): fill the slot
+                        // recursively instead of going through a scalar store.
+                        self.gen_agg_store(slot, e, elem, span, what)?;
+                    } else {
+                        let v = self.gen_value(e)?.scalar(span, what)?;
+                        let v = self.coerce(v, &elem_ty, span, what)?;
+                        bld(self.builder.build_store(slot, v))?;
+                    }
                 }
                 Ok(())
             }
@@ -4787,11 +4793,17 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             // Aggregate literals are handled on the "fill by target type" path of let/assign;
             // elsewhere (indexing, arguments) they build a temporary slot by default rules.
             HirExpr::Array(elems, span) => {
-                let arr_ty = self.i64_ty.array_type(elems.len() as u32);
+                // Element type from the first element (inference guarantees every
+                // element has the same type). Defaults to i64 for an empty literal.
+                let elem_ty = if elems.is_empty() {
+                    Ty::I64
+                } else {
+                    self.elem_ty_hint(&elems[0])
+                };
+                let llvm_elem = self.t(&elem_ty, *span)?;
+                let arr_ty = llvm_elem.array_type(elems.len() as u32);
                 let tmp = bld(self.builder.build_alloca(arr_ty, "array"))?;
                 for (i, e) in elems.iter().enumerate() {
-                    let v = self.gen_value(e)?.scalar(*span, "array element")?;
-                    let v = self.coerce(v, &self.i64_ty.into(), *span, "array element")?;
                     let idx = self.i32_ty.const_int(i as u64, false);
                     let slot = bld(unsafe {
                         self.builder.build_in_bounds_gep(
@@ -4801,7 +4813,13 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             "aelem",
                         )
                     })?;
-                    bld(self.builder.build_store(slot, v))?;
+                    if is_agg(&elem_ty) {
+                        self.gen_agg_store(slot, e, &elem_ty, *span, "array element")?;
+                    } else {
+                        let v = self.gen_value(e)?.scalar(*span, "array element")?;
+                        let v = self.coerce(v, &llvm_elem, *span, "array element")?;
+                        bld(self.builder.build_store(slot, v))?;
+                    }
                 }
                 Ok(GenValue::Agg(tmp))
             }
@@ -5075,6 +5093,31 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 let iv = v.into_int_value();
                 Ok(GenValue::Scalar(bld(self.builder.build_int_neg(iv, "neg"))?.into()))
             }
+            HirExpr::Unary {
+                op: UnOp::BitNot,
+                expr: inner,
+                span,
+            } => {
+                let v = self.gen_value(inner)?.scalar(*span, "bitwise not")?;
+                let iv = v.into_int_value();
+                Ok(GenValue::Scalar(bld(self.builder.build_not(iv, "bnot"))?.into()))
+            }
+            HirExpr::Unary {
+                op: UnOp::Not,
+                expr: inner,
+                span,
+            } => {
+                let v = self.gen_value(inner)?.scalar(*span, "logical not")?;
+                let iv = v.into_int_value();
+                if iv.get_type().get_bit_width() == 1 {
+                    let not = bld(self.builder.build_not(iv, "lnot"))?;
+                    return Ok(GenValue::Scalar(not.into()));
+                }
+                // Truthiness: anything non-zero is true, so `!x` is `x == 0`.
+                let zero = iv.get_type().const_zero();
+                let not = bld(self.builder.build_int_compare(IntPredicate::EQ, iv, zero, "lnot"))?;
+                Ok(GenValue::Scalar(not.into()))
+            }
             HirExpr::Binary { op, lhs, rhs, span } => {
                 let ty = self.expr_ty(expr)?;
                 if ty == Ty::Str {
@@ -5141,8 +5184,21 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     let join_bb = self.context.append_basic_block(self.cur_func, "div_join");
                     bld(self.builder.build_conditional_branch(is_zero, zero_bb, calc_bb))?;
                     self.builder.position_at_end(zero_bb);
-                    bld(self.builder.build_store(out_slot, l_ty.const_zero()))?;
-                    bld(self.builder.build_unconditional_branch(join_bb))?;
+                    // Division by zero has no defined result; silently yielding 0 hid
+                    // real bugs, so print a line-numbered diagnostic and abort.
+                    let what = if matches!(op, BinOp::Div) {
+                        "division"
+                    } else {
+                        "remainder"
+                    };
+                    let msg = self.global_string(&format!(
+                        "aero: {what} by zero (line {})\n",
+                        span.line
+                    ))?;
+                    let call_args: [BasicMetadataValueEnum<'ctx>; 1] = [msg.into()];
+                    bld(self.builder.build_call(self.printf, &call_args, "div0_msg"))?;
+                    bld(self.builder.build_call(self.abort, &[], "div0_abort"))?;
+                    bld(self.builder.build_unreachable())?;
                     self.builder.position_at_end(calc_bb);
                     let out = bld(match op {
                         BinOp::Div => self.builder.build_int_signed_div(l, r, "div"),
@@ -5279,7 +5335,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     let rf = r.into_float_value();
                     let pred = match op {
                         CmpOp::Eq => FloatPredicate::OEQ,
-                        CmpOp::Ne => FloatPredicate::ONE,
+                        CmpOp::Ne => FloatPredicate::UNE,
                         CmpOp::Lt => FloatPredicate::OLT,
                         CmpOp::Gt => FloatPredicate::OGT,
                         CmpOp::Le => FloatPredicate::OLE,
@@ -6619,11 +6675,28 @@ _ => {
                         ))?;
                         Ok(GenValue::Scalar(v.into()))
                     }
-                    Ty::Array(elem, _) => {
+                    Ty::Array(elem, n) => {
+                        self.check_const_index(index, *n, span)?;
                         let elem_ty = self.t(elem, span)?;
                         let arr_ty = self.t(&ty, span)?;
-                        let v = self.gen_array_index(arr_ty, ptr, elem_ty, index, span)?;
-                        Ok(GenValue::Scalar(v))
+                        let idx = self.gen_value(index)?.scalar(span, "array index")?;
+                        let idx = self.coerce(idx, &self.i64_ty.into(), span, "array index")?;
+                        let slot = bld(unsafe {
+                            self.builder.build_in_bounds_gep(
+                                arr_ty,
+                                ptr,
+                                &[self.i32_ty.const_zero(), idx.into_int_value()],
+                                "aidx",
+                            )
+                        })?;
+                        if is_agg(elem) {
+                            // Aggregate element: hand back its address so field access
+                            // and nested indexing keep working (`arr[i].field`).
+                            Ok(GenValue::Agg(slot))
+                        } else {
+                            let v = bld(self.builder.build_load(elem_ty, slot, "aload"))?;
+                            Ok(GenValue::Scalar(v))
+                        }
                     }
                     Ty::Ptr(elem) => {
                         let elem_ty = self.t(elem, span)?;
@@ -6745,47 +6818,90 @@ _ => {
                     }),
                 }
             }
-            HirExpr::Array(elems, _) => {
-                // Array-literal indexing: [1,2,3][0]
-                let tmp = self.gen_value(target)?.agg(span, "index")?;
-                let arr_ty = self.i64_ty.array_type(elems.len() as u32);
-                let v = self.gen_array_index(
-                    arr_ty.into(),
-                    tmp,
-                    self.i64_ty.into(),
-                    index,
-                    span,
-                )?;
-                Ok(GenValue::Scalar(v))
+            other => {
+                // General aggregate target: `obj.field[i]`, `f()[0]`, array literals,
+                // nested indexing, ...
+                // Evaluate the target to its in-memory slot, then index that.
+                let ty = self.expr_ty(other)?;
+                let base = self.gen_value(other)?.agg(span, "index target")?;
+                match &ty {
+                    Ty::Array(elem, n) => {
+                        self.check_const_index(index, *n, span)?;
+                        let elem_ty = self.t(elem, span)?;
+                        let arr_ty = self.t(&ty, span)?;
+                        let idx = self.gen_value(index)?.scalar(span, "array index")?;
+                        let idx = self.coerce(idx, &self.i64_ty.into(), span, "array index")?;
+                        let slot = bld(unsafe {
+                            self.builder.build_in_bounds_gep(
+                                arr_ty,
+                                base,
+                                &[self.i32_ty.const_zero(), idx.into_int_value()],
+                                "aidx",
+                            )
+                        })?;
+                        if is_agg(elem) {
+                            Ok(GenValue::Agg(slot))
+                        } else {
+                            let v = bld(self.builder.build_load(elem_ty, slot, "aload"))?;
+                            Ok(GenValue::Scalar(v))
+                        }
+                    }
+                    Ty::Tuple(elems) => {
+                        let k = self.const_index(index, span)?;
+                        if k >= elems.len() {
+                            return Err(CodegenError {
+                                msg: format!("tuple index {k} out of bounds (length {})", elems.len()),
+                                line: span.line,
+                                col: span.col,
+                            });
+                        }
+                        let elem_ty = self.t(&elems[k], span)?;
+                        let slot_ty = self.t(&ty, span)?;
+                        let slot = bld(unsafe {
+                            self.builder.build_in_bounds_gep(
+                                slot_ty,
+                                base,
+                                &[
+                                    self.i32_ty.const_zero(),
+                                    self.i32_ty.const_int(k as u64, false),
+                                ],
+                                "tidx",
+                            )
+                        })?;
+                        if is_agg(&elems[k]) {
+                            Ok(GenValue::Agg(slot))
+                        } else {
+                            let v = bld(self.builder.build_load(elem_ty, slot, "tload"))?;
+                            Ok(GenValue::Scalar(v))
+                        }
+                    }
+                    other_ty => Err(CodegenError {
+                        msg: format!("cannot index into type `{other_ty}`"),
+                        line: other.span().line,
+                        col: other.span().col,
+                    }),
+                }
             }
-            other => Err(CodegenError {
-                msg: "only variables and array literals can be indexed".to_string(),
-                line: other.span().line,
-                col: other.span().col,
-            }),
         }
     }
 
-    /// Array index: GEP [0, index] then load.
-    fn gen_array_index(
-        &mut self,
-        arr_ty: BasicTypeEnum<'ctx>,
-        ptr: PointerValue<'ctx>,
-        elem_ty: BasicTypeEnum<'ctx>,
+    /// Reject a constant index that is provably out of bounds.
+    fn check_const_index(
+        &self,
         index: &HirExpr,
+        len: usize,
         span: Span,
-    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let idx = self.gen_value(index)?.scalar(span, "array index")?;
-        let idx = self.coerce(idx, &self.i64_ty.into(), span, "array index")?;
-        let slot = bld(unsafe {
-            self.builder.build_in_bounds_gep(
-                arr_ty,
-                ptr,
-                &[self.i32_ty.const_zero(), idx.into_int_value()],
-                "aidx",
-            )
-        })?;
-        bld(self.builder.build_load(elem_ty, slot, "aload"))
+    ) -> Result<(), CodegenError> {
+        if let HirExpr::IntLit(k, _) = index {
+            if *k < 0 || (*k as usize) >= len {
+                return Err(CodegenError {
+                    msg: format!("index {k} is out of bounds for an array of length {len}"),
+                    line: span.line,
+                    col: span.col,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Tensor index: `a[i]` GEPs one layer of the current level (full tensor or sub-tensor).
@@ -7773,7 +7889,8 @@ _ => {
                     .get(def_id)
                     .ok_or_else(|| self.internal_err(span, "index target not allocated"))?;
                 match &ty {
-                    Ty::Array(elem, _) => {
+                    Ty::Array(elem, n) => {
+                        self.check_const_index(index, *n, span)?;
                         let elem_ty = self.t(elem, span)?;
                         let arr_ty = self.t(&ty, span)?;
                         let idx = self.gen_value(index)?.scalar(span, "index write")?;
@@ -7873,27 +7990,62 @@ _ => {
                     }),
                 }
             }
-            HirExpr::Array(elems, _) => {
-                // Array-literal index write: temp slot (elements assumed i64, matching gen_value literals)
-                let tmp = self.gen_value(target)?.agg(span, "index write")?;
-                let arr_ty = self.i64_ty.array_type(elems.len() as u32);
-                let idx = self.gen_value(index)?.scalar(span, "index write")?;
-                let idx = self.coerce(idx, &self.i64_ty.into(), span, "index write")?;
-                let slot = bld(unsafe {
-                    self.builder.build_in_bounds_gep(
-                        arr_ty,
-                        tmp,
-                        &[self.i32_ty.const_zero(), idx.into_int_value()],
-                        "aidxw",
-                    )
-                })?;
-                Ok((slot, self.i64_ty.into()))
+            other => {
+                // General aggregate index-write target: array literal, `obj.field[i]`,
+                // nested indexing, ... Evaluate it to its slot and index that.
+                let ty = self.expr_ty(other)?;
+                let base = self.gen_value(other)?.agg(span, "index write")?;
+                match &ty {
+                    Ty::Array(elem, n) => {
+                        self.check_const_index(index, *n, span)?;
+                        let elem_ty = self.t(elem, span)?;
+                        let arr_ty = self.t(&ty, span)?;
+                        let idx = self.gen_value(index)?.scalar(span, "index write")?;
+                        let idx = self.coerce(idx, &self.i64_ty.into(), span, "index write")?;
+                        let slot = bld(unsafe {
+                            self.builder.build_in_bounds_gep(
+                                arr_ty,
+                                base,
+                                &[self.i32_ty.const_zero(), idx.into_int_value()],
+                                "aidxw",
+                            )
+                        })?;
+                        Ok((slot, elem_ty))
+                    }
+                    Ty::Tuple(elems) => {
+                        let k = self.const_index(index, span)?;
+                        if k >= elems.len() {
+                            return Err(CodegenError {
+                                msg: format!(
+                                    "tuple index {k} out of bounds (length {})",
+                                    elems.len()
+                                ),
+                                line: span.line,
+                                col: span.col,
+                            });
+                        }
+                        let elem_ty = self.t(&elems[k], span)?;
+                        let slot_ty = self.t(&ty, span)?;
+                        let slot = bld(unsafe {
+                            self.builder.build_in_bounds_gep(
+                                slot_ty,
+                                base,
+                                &[
+                                    self.i32_ty.const_zero(),
+                                    self.i32_ty.const_int(k as u64, false),
+                                ],
+                                "tidxw",
+                            )
+                        })?;
+                        Ok((slot, elem_ty))
+                    }
+                    other_ty => Err(CodegenError {
+                        msg: format!("cannot index-write into type `{other_ty}`"),
+                        line: other.span().line,
+                        col: other.span().col,
+                    }),
+                }
             }
-            _ => Err(CodegenError {
-                msg: "only variables and array literals can be index-written".to_string(),
-                line: span.line,
-                col: span.col,
-            }),
         }
     }
 

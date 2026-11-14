@@ -36,34 +36,6 @@ Usage:
   aero ls                          list packages/versions in the registry
   aero registry                    print the registry location";
 
-/// Split an optional trailing `-O<n>` optimization flag from a path argument.
-/// Returns `(path, opt_level)`; opt defaults to O2.
-fn parse_opt_flag(arg: &str) -> (&str, aero_ir::aot::OptLevel) {
-    // Find the last whitespace-separated token; if it looks like `-O<n>`, use it.
-    let trimmed = arg.trim_end();
-    if let Some(idx) = trimmed.rfind(' ') {
-        let (head, tail) = trimmed.split_at(idx + 1);
-        if let Some(opt) = match_opt_flag(tail) {
-            return (head.trim_end(), opt);
-        }
-    }
-    if let Some(opt) = match_opt_flag(trimmed) {
-        return ("", opt);
-    }
-    (trimmed, aero_ir::aot::OptLevel::default())
-}
-
-/// Map a `-O<n>` token to an `OptLevel`; returns None if `s` is not a valid flag.
-fn match_opt_flag(s: &str) -> Option<aero_ir::aot::OptLevel> {
-    match s {
-        "-O0" => Some(aero_ir::aot::OptLevel::O0),
-        "-O1" => Some(aero_ir::aot::OptLevel::O1),
-        "-O2" => Some(aero_ir::aot::OptLevel::O2),
-        "-O3" => Some(aero_ir::aot::OptLevel::O3),
-        _ => None,
-    }
-}
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let code = match args.get(1).map(String::as_str) {
@@ -179,7 +151,23 @@ fn main() {
 
 /// `aero run <file|dir> [-O<n>] [--target <triple>]`: files take the single-file pipeline; directories (or those with Aero.toml) use the package flow.
 fn cmd_run(argv: &[String]) -> u8 {
-    let flags = parse_build_flags(argv);
+    let flags = match parse_build_flags(argv) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+    // `aero run` executes on the host via the JIT; a cross target would be
+    // silently ignored, so reject it instead of producing a host binary.
+    let host = aero_ir::aot::host_target_triple();
+    if flags.triple != host {
+        eprintln!(
+            "error: `aero run` executes on the host, so `--target {0}` is not supported; use `aero build --target {0}` instead",
+            flags.triple
+        );
+        return 2;
+    }
     let p = Path::new(flags.path);
     if p.is_dir() || p.join("Aero.toml").exists() {
         match aero_pm::run_package(p) {
@@ -202,7 +190,13 @@ fn cmd_run(argv: &[String]) -> u8 {
 fn cmd_build(argv: &[String]) -> u8 {
     // Peel an optional `--target <triple>`, `--shared`/`--pyext`, `--py-module`
     // and `-O<n>` flags.
-    let flags = parse_build_flags(argv);
+    let flags = match parse_build_flags(argv) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
     let p = Path::new(flags.path);
     if p.is_file() {
         let source_dir = p.parent();
@@ -389,7 +383,11 @@ struct BuildFlags<'a> {
 /// Parse `--target <triple>`, `--shared`, `--pyext`, `--py-module`,
 /// `--py-home`, `--ndk` and `-O<n>` flags from a build/run argument string.
 /// The triple defaults to the host triple when not specified.
-fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
+///
+/// Unknown options, missing option values and extra positional arguments are
+/// hard errors: silently ignoring them used to turn a typo such as `--sharedd`
+/// into a normal host build with exit code 0.
+fn parse_build_flags(argv: &[String]) -> Result<BuildFlags<'_>, String> {
     let mut triple = aero_ir::aot::host_target_triple();
     let mut opt = aero_ir::aot::OptLevel::default();
     let mut shared = false;
@@ -408,66 +406,80 @@ fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
         match toks[i] {
             "--target" => {
                 i += 1;
-                if i < toks.len() {
-                    triple = toks[i];
+                if i >= toks.len() {
+                    return Err("`--target` requires a target triple (e.g. x86_64-unknown-linux-gnu)".to_string());
                 }
+                triple = toks[i];
             }
             "--shared" => shared = true,
             "--pyext" => pyext = true,
             "--cpp" => cpp = true,
             "--py-module" => {
                 i += 1;
-                if i < toks.len() {
-                    py_module = Some(toks[i]);
+                if i >= toks.len() {
+                    return Err("`--py-module` requires a module name".to_string());
                 }
+                py_module = Some(toks[i]);
             }
             "--py-home" => {
                 i += 1;
-                if i < toks.len() {
-                    py_home = Some(toks[i]);
+                if i >= toks.len() {
+                    return Err("`--py-home` requires a path".to_string());
                 }
+                py_home = Some(toks[i]);
             }
             "--ndk" => {
                 i += 1;
-                if i < toks.len() {
-                    ndk = Some(toks[i]);
+                if i >= toks.len() {
+                    return Err("`--ndk` requires a path".to_string());
                 }
+                ndk = Some(toks[i]);
             }
             "--emit-obj" => emit_obj = true,
             "-nostdlib" => freestanding_cli = true,
             "--link-arg" => {
                 i += 1;
-                if i < toks.len() {
-                    link_args.push(toks[i]);
+                if i >= toks.len() {
+                    return Err("`--link-arg` requires a value".to_string());
                 }
+                link_args.push(toks[i]);
             }
             "-T" => {
                 i += 1;
-                if i < toks.len() {
-                    link_args.push("-T");
-                    link_args.push(toks[i]);
+                if i >= toks.len() {
+                    return Err("`-T` requires a linker-script path".to_string());
                 }
+                link_args.push("-T");
+                link_args.push(toks[i]);
             }
             "-e" => {
                 i += 1;
-                if i < toks.len() {
-                    link_args.push("-e");
-                    link_args.push(toks[i]);
+                if i >= toks.len() {
+                    return Err("`-e` requires an entry-point symbol".to_string());
                 }
+                link_args.push("-e");
+                link_args.push(toks[i]);
             }
             "-O0" => opt = aero_ir::aot::OptLevel::O0,
             "-O1" => opt = aero_ir::aot::OptLevel::O1,
             "-O2" => opt = aero_ir::aot::OptLevel::O2,
             "-O3" => opt = aero_ir::aot::OptLevel::O3,
             other => {
+                if other.starts_with('-') {
+                    return Err(format!("unknown option `{other}` (run `aero help` for usage)"));
+                }
                 if path.is_empty() {
                     path = other;
+                } else {
+                    return Err(format!(
+                        "unexpected argument `{other}` (already got `{path}`)"
+                    ));
                 }
             }
         }
         i += 1;
     }
-    BuildFlags {
+    Ok(BuildFlags {
         path,
         triple,
         opt,
@@ -480,7 +492,7 @@ fn parse_build_flags(argv: &[String]) -> BuildFlags<'_> {
         emit_obj,
         freestanding_cli,
         link_args,
-    }
+    })
 }
 
 /// Shared-library file extension (without dot) for a target triple (`dll`/`so`/`dylib`).

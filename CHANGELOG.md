@@ -28,6 +28,66 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **Clippy false positive on trailing `return`**: the trailing-return style rule was
   removed; `return expr;` at the end of a block is allowed.
 
+### Fixed — dogfooding round 3 (silent wrong answers)
+- **A trailing expression was never used as the return value**: `fn f(a: i64) -> i64 { a + 1 }`
+  evaluated `a + 1` and dropped it, so the function silently returned `0`. Blocks now
+  distinguish `Stmt::TailExpr` (no `;`, the block's value) from `Stmt::Expr`; a trailing
+  expression in a function body is lowered to an explicit `return`.
+- **`match` binding patterns did not exist**: `n => { ... }` was parsed as an enum variant
+  and rejected with `no enum defines a variant named n`, so `MatchPattern::Bind` in lowering
+  was dead code. A bare identifier starting with a lowercase letter is now a binding; an
+  uppercase one stays an enum variant (`Nothing => ...`), and `Enum::Variant` is unaffected.
+- **A non-`void` function with no `return` silently returned zero**: it is now a hard
+  lowering error (`function ... has return type ... but its body never returns a value`).
+  `extern "C"` declarations are excluded (they have no body).
+
+### Fixed — dogfooding round 2 (language / runtime)
+- **Unary `~` and `!` did not lex**: `~x` and `!flag` failed with a lexer error. `~` is
+  bitwise NOT (integers) and `!` is logical NOT (booleans); both now type-check and lower.
+- **`NaN != NaN` returned `false`**: float `!=` used `FloatPredicate::ONE` (ordered, NaN
+  yields false) instead of `UNE`. All IEEE comparisons now behave correctly.
+- **Zero-argument closures `||` failed to parse**: `||` was always lexed as the logical-or
+  operator, so `let f = || -> i64 { 42 };` was a syntax error.
+- **Closure `let` locals were reported as captures**: `|x: i64| -> i64 { let y = x * 2; y + 1 }`
+  raised `closures cannot capture ...`. Bound locals are now tracked while walking the body.
+- **Calling an outer closure inside another closure** gave `internal error: variable has no
+  stack slot`; the capture check now also inspects call callees and method receivers.
+- **Closure with a value body but no return annotation** gave a confusing
+  `print arguments cannot be void function calls`; it now reports that the return type must
+  be annotated.
+- **`dyn Trait` parameters always type-mismatched**: `unify` had no `(Dyn, Dyn)` case, so
+  `expected dyn Area, got dyn Area` appeared. Two trait objects of the same trait now unify.
+- **`-> void` was an unknown type**: `fn f(...) -> void` now lowers to `Ty::Void` (identical
+  to omitting the return type) across codegen and inference.
+- **Arrays of structs were unsupported**: `[Item { .. }, ...]` aborted with
+  `array element requires a scalar value`. Array literals now store aggregate elements
+  recursively, and array literals take their element type from the elements (not always `i64`).
+- **Indexing anything except a variable or an array literal failed**: `bag.items[0]`,
+  `f()[1]`, and `t.0[2]` now work for both load and store; aggregate elements keep their
+  address so `bag.items[1].field = v` and `arr[i].field` work.
+- **Constant out-of-bounds index was silently accepted**: `a[5]` on `[i64; 3]` is now a
+  compile error (`index 5 is out of bounds for an array of length 3`).
+- **Integer division/remainder by zero silently returned 0**: generated code now prints
+  `aero: division by zero (line N)` and aborts (exit code 3).
+- **Confusing parser errors**: `let (a, b) = ...` (tuple destructuring) and `(i64) -> i64`
+  (function-pointer type) now have dedicated messages instead of `expected identifier` /
+  `expected right paren`.
+
+### Fixed — dogfooding round 2 (CLI)
+- **Unknown options were silently ignored**: `aero build f.aero --sharedd` exited 0 and
+  produced a host binary. Unknown `-`/`--` options are now hard errors (exit 2).
+- **`--target` without a value was silently ignored**: it now errors (exit 2). The same
+  applies to `--py-module` / `--py-home` / `--ndk` / `--link-arg` / `-T` / `-e`.
+- **Extra positional arguments were silently ignored**: `aero build a.aero b.aero` now errors.
+- **`aero run` accepted and ignored `--target`**: it now rejects a non-host target and points
+  at `aero build --target <triple>`.
+
+### Fixed — examples
+- `examples/generic_test.aero` used `max` as a generic function name, which collides with the
+  reserved tensor-reduction builtin; renamed to `bigger`.
+- `examples/struct_demo.aero` moved a non-`Copy` struct then used it again; both structs now
+  derive `Copy`.
+
 ### Documentation
 - Added `docs/api/`: language API reference, embedding/ABI reference, HTTP API guide and
   registry protocol.
@@ -37,8 +97,10 @@ Patch release. Scope is strictly fixes — no new language surface.
 - README version and release URLs moved to 1.2.6.
 
 ### Tooling
-- `scripts/verify.ps1`: 11 assertions (P0-1 … P0-11), zero arguments, exit 0 only when
-  all pass.
+- `scripts/verify.ps1`: 25 assertions — P0-1 … P0-11 for the release plan plus D1 … D14
+  dogfood regressions (unary ops, NaN, closures, struct arrays, `-> void`, `dyn` params,
+  CLI argument errors, division by zero, constant out-of-bounds, examples). Zero arguments,
+  exit 0 only when all pass.
 
 ## [1.2.5] - 2026-10-11
 

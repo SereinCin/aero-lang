@@ -1,9 +1,11 @@
 // Struct demo: named-field types end to end
+#[derive(Copy)]
 struct Point {
     x: i64,
     y: i64,
 }
 
+#[derive(Copy)]
 struct Rect {
     origin: Point,
     w: i64,

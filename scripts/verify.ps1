@@ -176,6 +176,181 @@ if ($IsWindows -or ($env:OS -match "Windows")) {
 }
 
 # —————————————————————————————————————
+# 狗粮回归（D1~D8）：实测发现并修复的语言/CLI bug
+# —————————————————————————————————————
+function Run-Aero([string]$name, [string]$src) {
+    $f = Join-Path $temp "$name.aero"
+    $src | Out-File -FilePath $f -Encoding UTF8 -Force
+    $o = (& $aero run $f 2>&1) -join "`n"
+    return @{ Out = $o; Exit = $LASTEXITCODE }
+}
+
+# D1: 一元 `!` / `~`
+$d1 = Run-Aero "d1_unary" @'
+let t = true;
+let x = 11;
+print("%d %lld\n", !t, ~x);
+'@
+Assert "D1" "一元 `!` / `~` 可用" ($d1.Exit -eq 0 -and $d1.Out -match "0 -12") "out=$($d1.Out)"
+
+# D2: NaN 参与 `!=` 必须为 true
+$d2 = Run-Aero "d2_nan" @'
+fn mk_nan() -> f64 {
+    return 0.0 / 0.0;
+}
+let a = mk_nan();
+print("nan_eq=%d nan_ne=%d\n", a == a, a != a);
+'@
+Assert "D2" "NaN 的 `==` / `!=` 符合 IEEE" ($d2.Exit -eq 0 -and $d2.Out -match "nan_eq=0 nan_ne=1") "out=$($d2.Out)"
+
+# D3: 零参数闭包 `||`
+$d3 = Run-Aero "d3_closure0" @'
+let f = || -> i64 { 42 };
+print("%lld\n", f());
+'@
+Assert "D3" "零参数闭包 `||` 可用" ($d3.Exit -eq 0 -and $d3.Out -match "42") "out=$($d3.Out)"
+
+# D4: 闭包体内 let 局部变量不算捕获
+$d4 = Run-Aero "d4_closure_local" @'
+let blk = |x: i64| -> i64 { let y = x * 2; y + 1 };
+print("%lld\n", blk(5));
+'@
+Assert "D4" "闭包体内 `let` 不误判为捕获" ($d4.Exit -eq 0 -and $d4.Out -match "11") "out=$($d4.Out)"
+
+# D5: 结构体数组（字面量 / for / 下标 / 字段读写）
+$d5 = Run-Aero "d5_struct_array" @'
+struct Item {
+    id: i64,
+    w: i64,
+}
+struct Bag {
+    items: [Item; 3],
+}
+let b = Bag { items: [Item { id: 1, w: 10 }, Item { id: 2, w: 20 }, Item { id: 3, w: 30 }] };
+let total = 0;
+for (it in b.items) {
+    total = total + it.id * it.w;
+}
+print("total=%lld first=%lld\n", total, b.items[0].w);
+b.items[1].w = 99;
+print("mut=%lld\n", b.items[1].w);
+'@
+$d5Ok = $d5.Exit -eq 0 -and $d5.Out -match "total=140 first=10" -and $d5.Out -match "mut=99"
+Assert "D5" "结构体数组：字面量/遍历/下标/字段写" $d5Ok "out=$($d5.Out)"
+
+# D6: 显式 `-> void` 返回类型
+$d6 = Run-Aero "d6_void" @'
+struct C {
+    n: i64,
+}
+impl C {
+    fn bump(c: &mut C) -> void {
+        c.n = c.n + 1;
+    }
+    fn get(c: &C) -> i64 {
+        return c.n;
+    }
+}
+let c = C { n: 0 };
+c.bump();
+c.bump();
+print("%lld\n", c.get());
+'@
+Assert "D6" "显式 `-> void` 返回类型可用" ($d6.Exit -eq 0 -and $d6.Out -match "^2") "out=$($d6.Out)"
+
+# D7: `dyn Trait` 作为函数参数
+$d7 = Run-Aero "d7_dyn_param" @'
+#[derive(Copy)]
+struct Sq {
+    n: i64,
+}
+trait Area {
+    fn area(s: Sq) -> i64;
+}
+impl Area for Sq {
+    fn area(s: Sq) -> i64 {
+        return s.n * s.n;
+    }
+}
+fn dyn_area(d: dyn Area) -> i64 {
+    return d.area();
+}
+let s = Sq { n: 4 };
+let d = s as dyn Area;
+print("%lld\n", dyn_area(d));
+'@
+Assert "D7" "`dyn Trait` 可作函数参数" ($d7.Exit -eq 0 -and $d7.Out -match "16") "out=$($d7.Out)"
+
+# D8: CLI 不静默忽略错误参数
+$d8file = Join-Path $temp "d8_cli.aero"
+@'
+print("hi\n");
+'@ | Out-File -FilePath $d8file -Encoding UTF8 -Force
+$d8a = (& $aero build $d8file --sharedd 2>&1) -join "`n"
+$d8aExit = $LASTEXITCODE
+$d8b = (& $aero build $d8file --target 2>&1) -join "`n"
+$d8bExit = $LASTEXITCODE
+$d8c = (& $aero run $d8file --target x86_64-unknown-linux-gnu 2>&1) -join "`n"
+$d8cExit = $LASTEXITCODE
+$d8Ok = ($d8aExit -ne 0) -and ($d8bExit -ne 0) -and ($d8cExit -ne 0)
+Assert "D8" "CLI 未知选项 / 缺值 / run --target 均报错" $d8Ok "unknown=$d8aExit, missing=$d8bExit, run=$d8cExit"
+
+# D9: 除零必须报错终止（不能静默返回 0）
+$d9 = Run-Aero "d9_div0" @'
+let z = 0;
+print("before\n");
+print("%lld\n", 10 / z);
+print("unreachable\n");
+'@
+$d9Ok = $d9.Exit -ne 0 -and $d9.Out -match "division by zero" -and $d9.Out -notmatch "unreachable"
+Assert "D9" "除零报错终止（非静默 0）" $d9Ok "exit=$($d9.Exit) out=$($d9.Out)"
+
+# D10: 常量下标越界必须是编译错误
+$d10 = Run-Aero "d10_oob" @'
+let a = [1, 2, 3];
+print("%lld\n", a[5]);
+'@
+$d10Ok = $d10.Exit -ne 0 -and $d10.Out -match "out of bounds"
+Assert "D10" "常量下标越界报编译错误" $d10Ok "exit=$($d10.Exit) out=$($d10.Out)"
+
+# D11: 所有示例程序必须全部编译并运行成功
+$exBad = @()
+foreach ($ex in Get-ChildItem (Join-Path $root "examples") -Filter *.aero) {
+    & $aero run $ex.FullName *> $null
+    if ($LASTEXITCODE -ne 0) { $exBad += $ex.Name }
+}
+Assert "D11" "examples/*.aero 全部可运行" ($exBad.Count -eq 0) "failed=$($exBad -join ',')"
+
+# D12: 函数尾表达式是返回值（此前被静默丢弃、返回 0）
+$d12 = Run-Aero "d12_tail_expr" @'
+fn add1(a: i64) -> i64 {
+    let b = a + 1;
+    b
+}
+print("%lld %lld\n", add1(1), add1(41));
+'@
+Assert "D12" "函数尾表达式作为返回值" ($d12.Exit -eq 0 -and $d12.Out -match "2 42") "out=$($d12.Out)"
+
+# D13: match 绑定模式 `n => { ... }`（此前被误判为枚举变体）
+$d13 = Run-Aero "d13_match_bind" @'
+fn classify(x: i64) -> i64 {
+    match (x) {
+        0 => { return 100; }
+        n => { return n * 2; }
+    }
+}
+print("%lld %lld\n", classify(0), classify(5));
+'@
+Assert "D13" "match 绑定模式可用" ($d13.Exit -eq 0 -and $d13.Out -match "100 10") "out=$($d13.Out)"
+
+# D14: 非 void 函数无 return 必须报编译错误（此前静默返回 0）
+$d14 = Run-Aero "d14_no_return" @'
+fn broken() -> i64 { }
+print("%lld\n", broken());
+'@
+Assert "D14" "缺少 return 的非 void 函数报错" ($d14.Exit -ne 0 -and $d14.Out -match "never returns a value") "exit=$($d14.Exit) out=$($d14.Out)"
+
+# —————————————————————————————————————
 # 汇总输出
 # —————————————————————————————————————
 Write-Host "`n========== Aero 1.2.6 Verify Results =========="

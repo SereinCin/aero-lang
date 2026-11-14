@@ -2,7 +2,7 @@
 //
 // Coverage:
 //   1. the identity function identity<T>
-//   2. same-type parameter constraint max<T>(a: T, b: T) -> T
+//   2. same-type parameter constraint bigger<T>(a: T, b: T) -> T
 //   3. generic array parameter first<T>(arr: [T; 3]) -> T
 //   4. multiple generic params make_pair<A, B> -> (A, B)
 //   5. nested generics: a generic body calling another generic fn (relative instances + type_subst)
@@ -11,7 +11,7 @@ fn identity<T>(x: T) -> T {
     return x;
 }
 
-fn max<T>(a: T, b: T) -> T {
+fn bigger<T>(a: T, b: T) -> T {
     if (a > b) { return a; }
     return b;
 }
@@ -30,9 +30,9 @@ fn wrap<T>(x: T) -> T {
 
 print(identity(42));          // expect 42
 print("\n");
-print(max(3, 7));             // expect 7
+print(bigger(3, 7));             // expect 7
 print("\n");
-print(max(10, 5));            // expect 10
+print(bigger(10, 5));            // expect 10
 print("\n");
 let arr = [1, 2, 3];
 print(first(arr));            // expect 1

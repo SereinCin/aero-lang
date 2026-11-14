@@ -45,6 +45,10 @@ impl BinOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
     Neg,
+    /// Bitwise NOT (`~x`)
+    BitNot,
+    /// Logical NOT (`!x`)
+    Not,
 }
 
 /// Comparison operator (result type is boolean; codegen emits LLVM i1).
@@ -320,6 +324,8 @@ pub enum Stmt {
     Print(Vec<Expr>, Span),
     /// Expression statement `<expr>;`
     Expr(Expr, Span),
+    /// Trailing expression without `;` — the block's value (`{ ...; <expr> }`).
+    TailExpr(Expr, Span),
     /// `fn <name>[<T1, T2, ...>](<params>) [-> <ret>] { ... }` definition.
     /// The angle brackets hold generic type parameters (e.g. `fn max<T>(a: T, b: T) -> T`).
     /// `extern "gpu" fn ...` (is_gpu=true) is a GPU kernel declaration.
@@ -473,7 +479,7 @@ impl Stmt {
             | Stmt::AssignIndex { span, .. }
             | Stmt::AssignDeref { span, .. }
             | Stmt::AssignField { span, .. } => *span,
-            Stmt::Print(_, span) | Stmt::Expr(_, span) => *span,
+            Stmt::Print(_, span) | Stmt::Expr(_, span) | Stmt::TailExpr(_, span) => *span,
             Stmt::FnDef { span, .. } | Stmt::Return(_, span) => *span,
             Stmt::If { span, .. } | Stmt::While { span, .. } => *span,
             Stmt::Loop { span, .. } => *span,

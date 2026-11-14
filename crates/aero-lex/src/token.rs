@@ -112,6 +112,10 @@ pub enum TokenKind {
     Slash,
     #[token("%")]
     Percent,
+    #[token("~")]
+    Tilde,
+    #[token("!")]
+    Bang,
     #[token("&")]
     Amp,
     #[token("^")]
@@ -225,6 +229,8 @@ impl TokenKind {
             TokenKind::Star => "operator `*`",
             TokenKind::Slash => "operator `/`",
             TokenKind::Percent => "operator `%`",
+            TokenKind::Tilde => "operator `~`",
+            TokenKind::Bang => "operator `!`",
             TokenKind::Amp => "operator `&`",
             TokenKind::Caret => "operator `^`",
             TokenKind::Pipe => "operator `|`",
