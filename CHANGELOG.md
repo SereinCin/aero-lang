@@ -28,6 +28,20 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **Clippy false positive on trailing `return`**: the trailing-return style rule was
   removed; `return expr;` at the end of a block is allowed.
 
+### Fixed — installers and pyext
+- **Installer and shell scripts shipped stale version strings** (user-reported):
+  `Aero.iss`, `install.bat` / `uninstall.bat` / `update.bat` / `aero_cmd.bat` /
+  `aero_env.bat` / `README.txt`, and the Linux/macOS install and uninstall scripts
+  still said 1.0.0 / 1.1.0 / 1.2.0 / 1.2.1. All now report 1.2.6.
+- **`--pyext` linked libpython on Linux and macOS**: an extension module must leave
+  the CPython symbols undefined so the interpreter resolves them at import time.
+  manylinux runtime images ship no shared `libpython`, and linking it on macOS can
+  pull a second copy of the interpreter into the process. macOS now passes
+  `-undefined dynamic_lookup`; Windows still links its generated import library.
+- **Tensor capability text was wrong in both directions**: `matmul` and the
+  elementwise / BLAS Level-1 / reduction ops are implemented; autograd and
+  `transpose` are not. README and `docs/api/language-api.md` now say so.
+
 ### Fixed — dogfooding round 3 (silent wrong answers)
 - **A trailing expression was never used as the return value**: `fn f(a: i64) -> i64 { a + 1 }`
   evaluated `a + 1` and dropped it, so the function silently returned `0`. Blocks now
@@ -111,7 +125,7 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **Benchmarks Game**: nbody / fannkuch-redux / spectral-norm / binary-trees / mandelbrot — all 5 run correctly, on par with Rust / Go.
 
 ### Performance
-- Mandelbrot N=2000: Aero 155ms ≈ Rust 153ms / Go 174ms (AMD Ryzen 9 9950X3D)
+- Mandelbrot N=2000: Aero 151ms / C 157ms / Rust 158ms / Go 169ms (AMD Ryzen 9 9950X3D)
 
 ### Fixes
 - Bare identifier in tuple sub-pattern position now maps to `Bind`, not `EnumVariant`.

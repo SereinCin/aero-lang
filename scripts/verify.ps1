@@ -37,7 +37,10 @@ $aero = $bin
 # —————————————————————————————————————
 $docFiles = @(Join-Path $root "README.md")
 $docFiles += Get-ChildItem (Join-Path $root "docs") -Recurse -Include *.md -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-$foundModFrom = Select-String -Path $docFiles -Pattern 'mod\s+\w+\s+from' -ErrorAction SilentlyContinue
+# A line that mentions the syntax only to say it is unsupported is fine;
+# what must not exist is a line advertising it as usable.
+$foundModFrom = Select-String -Path $docFiles -Pattern 'mod\s+\w+\s+from' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Line -notmatch "doesn't exist|does not exist|不存在|Our mistake" }
 Assert "P0-1" "文档中无 'mod xxx from'" (-not $foundModFrom) ($(if ($foundModFrom) { "仍有出现" } else { "clean" }))
 
 # —————————————————————————————————————

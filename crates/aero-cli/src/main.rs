@@ -977,8 +977,12 @@ fn probe_python_exec(exe: &str) -> Option<PyEnv> {
 }
 
 /// Link configuration for a Python extension: `-L <prefix>/libs -l python313`
-/// (Windows) or `-L <prefix>/lib -l python3.13` (Unix). On Windows the import
-/// library is a MinGW-compatible one generated from the DLL (see
+/// on Windows only. Unix extension modules must leave the CPython symbols
+/// undefined and let the interpreter resolve them at import time, so no
+/// libpython is linked there: manylinux runtime images ship no shared
+/// libpython, and linking it on macOS can pull a second copy of the
+/// interpreter into the process. On Windows the import library is a
+/// MinGW-compatible one generated from the DLL (see
 /// [`ensure_mingw_python_import_lib`]), since MinGW ld cannot consume the MSVC
 /// `python313.lib` shipped with the official python.org builds.
 fn python_link_libs(env: &PyEnv, triple: &str) -> (Vec<String>, Vec<String>) {
@@ -987,11 +991,7 @@ fn python_link_libs(env: &PyEnv, triple: &str) -> (Vec<String>, Vec<String>) {
         let dir = ensure_mingw_python_import_lib(env);
         (vec![lib], vec![dir.to_string_lossy().into_owned()])
     } else {
-        let lib = format!("python{}.{}", env.major, env.minor);
-        (
-            vec![lib],
-            vec![env.prefix.join("lib").to_string_lossy().into_owned()],
-        )
+        (Vec::new(), Vec::new())
     }
 }
 

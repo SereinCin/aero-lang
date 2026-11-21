@@ -121,6 +121,12 @@ max(t: tensor) -> f64
 min(t: tensor) -> f64
 ```
 
+矩阵乘法：
+
+```aero
+matmul(a: tensor, b: tensor) -> tensor   // 二维张量相乘，结果形状为 rows(a) x cols(b)
+```
+
 逐元素：
 
 ```aero
@@ -147,7 +153,11 @@ blas_axpy(alpha: f64, x: tensor, y: tensor) -> void
 ```aero
 let a = tensor(3, 4);            // 3x4，元素类型默认 i64
 let b = tensor<f64>(3, 4);       // 显式元素类型
+a[0][1] = 7;                     // 按 [行][列] 写入
 ```
+
+> 张量支持：形状由编译期维度决定；逐元素四则、`matmul`、BLAS Level-1、四个归约均已实装。
+> **没有**自动微分（autograd）、`transpose`、切片和广播。
 
 ### 2.9 内联汇编
 

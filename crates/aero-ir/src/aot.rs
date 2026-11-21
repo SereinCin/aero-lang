@@ -665,7 +665,15 @@ fn compile_to_out(
         })?;
         return Ok(());
     }
-    link(&obj_path, &out_tmp, libs, lib_paths, shared, extra_args, target)?;
+    // A Python extension on Darwin is a bundle whose CPython symbols are
+    // resolved by the interpreter that loads it, so ld must not reject the
+    // undefined Py* references. Gcc/clang on Linux accept them by default.
+    let mut link_extra: Vec<String> = extra_args.to_vec();
+    if py_ext.is_some() && is_macho_triple(target) {
+        link_extra.push("-undefined".to_string());
+        link_extra.push("dynamic_lookup".to_string());
+    }
+    link(&obj_path, &out_tmp, libs, lib_paths, shared, &link_extra, target)?;
     // Copy from the ASCII temp dir back to the target path (supports non-ASCII paths)
     std::fs::copy(&out_tmp, out_path).map_err(|e| AeroError {
         phase: "AOT",
