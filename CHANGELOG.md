@@ -23,6 +23,14 @@ Patch release. Scope is strictly fixes — no new language surface.
   AOT builds were unaffected because `mem2reg` removed those allocas first.
 - **Subcommands treated `--help` / `-h` as a file or package name**: every subcommand now
   prints the usage text and exits 0.
+- **`aero install` stopped working on a freshly released toolchain**: the index URL is
+  pinned to the toolchain version, and `Aero-packages` had no `v1.2.6` release yet. When
+  the same-version index is missing, the CLI now falls back to
+  `releases/latest/download/packages.json` and says so, instead of failing every install.
+- **`uninstall.bat` removed nothing but reported success**: it compared `H:\Aero\`
+  (from `%~dp0`) against the `H:\Aero` that `install.bat` writes, so the PATH entry never
+  matched. Both sides are now trimmed and the script reports honestly when the entry is
+  absent.
 - **Closure bodies required a trailing `;`**: a block may now end with a bare expression
   (Rust-style tail expression), with or without the semicolon.
 - **Closure capture produced `internal error: variable has no stack slot`**: capturing an

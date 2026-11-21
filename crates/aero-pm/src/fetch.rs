@@ -30,6 +30,14 @@ pub fn index_url_for(toolchain: &str) -> String {
     format!("https://github.com/SereinCin/Aero-packages/releases/download/v{v}/packages.json")
 }
 
+/// 回退索引：`releases/latest/download/packages.json`。用于工具链刚发版、
+/// packages 仓库还没跟上（没有同版本 Release）的情况；没有这个回退，
+/// `aero install` 会在新版本上整段失效。
+pub fn fallback_index_url() -> String {
+    "https://github.com/SereinCin/Aero-packages/releases/latest/download/packages.json"
+        .to_string()
+}
+
 /// 一个远程包条目（来自 packages.json）。
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
@@ -164,23 +172,35 @@ pub fn install_package(
         )));
     }
     // 索引地址：默认绑定当前工具链版本（v<toolchain>/packages.json），可用
-    // AERO_INDEX_URL 覆盖（镜像 / 本地测试）。
-    let index_url = std::env::var("AERO_INDEX_URL")
+    // AERO_INDEX_URL 覆盖（镜像 / 本地测试）。同版本索引不存在时（刚发版、
+    // packages 仓库还停在上一个版本），退回 latest，而不是让 install 直接失败。
+    let override_url = std::env::var("AERO_INDEX_URL")
         .ok()
-        .filter(|s| !s.trim().is_empty())
+        .filter(|s| !s.trim().is_empty());
+    let primary = override_url
+        .clone()
         .unwrap_or_else(|| index_url_for(toolchain));
 
-    println!("fetching index: {index_url}");
-    let entries = fetch_index(&index_url).map_err(|e| {
-        if std::env::var("AERO_INDEX_URL").is_ok() {
-            e
-        } else {
-            PmError::new(format!(
-                "{e}\nhint: 找不到 aero v{toolchain} 的生态索引（{index_url}）——\
-                 该版本的 packages 可能尚未发布，或网络无法访问该 Release 资产",
-            ))
+    println!("fetching index: {primary}");
+    let entries = match fetch_index(&primary) {
+        Ok(entries) => entries,
+        Err(e) => {
+            if override_url.is_some() {
+                return Err(e);
+            }
+            let fallback = fallback_index_url();
+            println!("warning: no index for aero v{toolchain} ({e})");
+            println!("fetching index: {fallback}");
+            fetch_index(&fallback).map_err(|e2| {
+                PmError::new(format!(
+                    "{e2}\n无法获取生态索引，两个地址都失败：\n\
+                     - v{toolchain}: {primary}\n\
+                     - latest: {fallback}\n\
+                     hint: 用 AERO_INDEX_URL 指向可访问的 packages.json",
+                ))
+            })?
         }
-    })?;
+    };
     if entries.is_empty() {
         return Err(PmError::new("remote index has no packages"));
     }
@@ -1027,6 +1047,14 @@ mod tests {
     }
   ]
 }"#;
+
+    #[test]
+    fn fallback_index_uses_the_latest_alias() {
+        assert_eq!(index_url_for("v1.2.6"), index_url_for("1.2.6"));
+        assert!(index_url_for("1.2.6").ends_with("/download/v1.2.6/packages.json"));
+        assert!(fallback_index_url().ends_with("/releases/latest/download/packages.json"));
+        assert_ne!(fallback_index_url(), index_url_for("1.2.6"));
+    }
 
     #[test]
     fn parses_sample_index() {
