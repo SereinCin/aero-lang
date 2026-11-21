@@ -472,6 +472,21 @@ fn curl_download(url: &str, dest: &Path) -> bool {
     args.push(url.to_string());
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     if !run_ok("curl", &arg_refs) {
+        // Windows schannel can fail the certificate revocation check
+        // (CRYPT_E_NO_REVOCATION_CHECK) while the download itself is fine.
+        // Retry once without revocation checking instead of reporting a
+        // network failure and silently relying on a fallback URL.
+        if std::env::consts::OS == "windows" {
+            let mut retry = args.clone();
+            retry.insert(1, "--ssl-no-revoke".into());
+            let retry_refs: Vec<&str> = retry.iter().map(|s| s.as_str()).collect();
+            let _ = std::fs::remove_file(dest);
+            if run_ok("curl", &retry_refs)
+                && dest.metadata().map(|m| m.len()).unwrap_or(0) > 0
+            {
+                return true;
+            }
+        }
         let _ = std::fs::remove_file(dest);
         return false;
     }
@@ -585,6 +600,19 @@ fn download_bytes_via_curl(url: &str) -> Result<Vec<u8>, PmError> {
     args.push(url.to_string());
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     if !run_ok("curl", &arg_refs) {
+        // Same Windows schannel revocation-check workaround as curl_download.
+        if std::env::consts::OS == "windows" {
+            let mut retry = args.clone();
+            retry.insert(1, "--ssl-no-revoke".into());
+            let retry_refs: Vec<&str> = retry.iter().map(|s| s.as_str()).collect();
+            let _ = std::fs::remove_file(&tmp);
+            if run_ok("curl", &retry_refs) && tmp.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+                let bytes = std::fs::read(&tmp)
+                    .map_err(|e| PmError::new(format!("cannot read temp file: {e}")))?;
+                let _ = std::fs::remove_file(&tmp);
+                return Ok(bytes);
+            }
+        }
         let _ = std::fs::remove_file(&tmp);
         return Err(PmError::new(format!("curl failed for {url}")));
     }

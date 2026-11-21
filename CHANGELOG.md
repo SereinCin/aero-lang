@@ -27,6 +27,9 @@ Patch release. Scope is strictly fixes — no new language surface.
   pinned to the toolchain version, and `Aero-packages` had no `v1.2.6` release yet. When
   the same-version index is missing, the CLI now falls back to
   `releases/latest/download/packages.json` and says so, instead of failing every install.
+- **Windows downloads failed on a schannel revocation check**: curl is retried once with
+  `--ssl-no-revoke` before falling back to another host. The previous error message
+  ("curl/wget/powershell unavailable or failed") hid the real cause.
 - **`uninstall.bat` removed nothing but reported success**: it compared `H:\Aero\`
   (from `%~dp0`) against the `H:\Aero` that `install.bat` writes, so the PATH entry never
   matched. Both sides are now trimmed and the script reports honestly when the entry is
