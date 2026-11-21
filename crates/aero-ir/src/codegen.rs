@@ -2837,10 +2837,11 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         .get(*def_id as usize)
                         .ok_or_else(|| self.internal_err(*span, "missing function table"))?;
                     if hir_f.builtin {
-                        // `assert`/`assert_eq` are void (abort on failure). Other
-                        // builtins return values; when used as a discarded statement,
-                        // generate the value and drop it.
-                        if hir_f.name == "assert" || hir_f.name == "assert_eq" || hir_f.name == "str_free" {
+                        // Builtins with no return value (`assert`, `str_free`,
+                        // volatile/atomic stores, fences) are generated directly
+                        // as statements. Value-returning builtins are evaluated
+                        // and the result is dropped.
+                        if hir_f.ret.is_none() {
                             return self.gen_builtin_call(&hir_f.name, args, *span);
                         }
                         self.gen_value(expr)?;
@@ -3352,6 +3353,16 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
 
                     match &arm.pattern {
                         HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
+                            // Bind the scrutinee before the guard is evaluated so a
+                            // guard can reference the binding.
+                            if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
+                                let slot = bld(
+                                    self.builder
+                                        .build_alloca(scrut_val.get_type(), "match.bind"),
+                                )?;
+                                bld(self.builder.build_store(slot, scrut_val))?;
+                                self.vars.insert(*def_id, slot);
+                            }
                             // Always matches — unless a guard narrows it.
                             if let Some(g) = &arm.guard {
                                 let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
@@ -3476,14 +3487,17 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 // Generate arm bodies
                 for (i, arm) in arms.iter().enumerate() {
                     self.builder.position_at_end(body_bbs[i]);
-                    // Bind: copy scrutinee value to the bound variable
+                    // Bind: copy scrutinee value to the bound variable.
+                    // A guard may have bound it already during dispatch.
                     if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
-                        let slot = bld(
-                            self.builder
-                                .build_alloca(scrut_val.get_type(), "match.bind"),
-                        )?;
-                        bld(self.builder.build_store(slot, scrut_val))?;
-                        self.vars.insert(*def_id, slot);
+                        if !self.vars.contains_key(def_id) {
+                            let slot = bld(
+                                self.builder
+                                    .build_alloca(scrut_val.get_type(), "match.bind"),
+                            )?;
+                            bld(self.builder.build_store(slot, scrut_val))?;
+                            self.vars.insert(*def_id, slot);
+                        }
                     }
                     self.gen_block(&arm.body)?;
                     if !self.cur_block_terminated() {
@@ -3567,6 +3581,13 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             let is_last = i == arms.len() - 1;
             match &arm.pattern {
                 HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => {
+                    // Bind the whole enum value before the guard is evaluated so a
+                    // guard can reference the binding.
+                    if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
+                        let slot = bld(self.builder.build_alloca(enum_llvm, "enum.bind"))?;
+                        self.copy_agg(slot, scrut_ptr, &enum_ty, span, "enum match bind")?;
+                        self.vars.insert(*def_id, slot);
+                    }
                     // Always matches — unless a guard narrows it.
                     if let Some(g) = &arm.guard {
                         let guard_val = self.gen_value(g)?.scalar(arm.span, "guard")?;
@@ -3662,10 +3683,13 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             self.builder.position_at_end(body_bbs[i]);
             match &arm.pattern {
                 HirMatchPattern::Bind(_, def_id) => {
-                    // Bind the whole enum value into a fresh slot
-                    let slot = bld(self.builder.build_alloca(enum_llvm, "enum.bind"))?;
-                    self.copy_agg(slot, scrut_ptr, &enum_ty, span, "enum match bind")?;
-                    self.vars.insert(*def_id, slot);
+                    // Bind the whole enum value into a fresh slot (a guard may have
+                    // already done this during dispatch).
+                    if !self.vars.contains_key(def_id) {
+                        let slot = bld(self.builder.build_alloca(enum_llvm, "enum.bind"))?;
+                        self.copy_agg(slot, scrut_ptr, &enum_ty, span, "enum match bind")?;
+                        self.vars.insert(*def_id, slot);
+                    }
                 }
                 HirMatchPattern::EnumVariant { variant, bind, .. } => {
                     if let Some((_, def_id)) = bind {
@@ -6220,9 +6244,13 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                                 });
                             }
                             let ptr = self.gen_value(&args[0])?.scalar(*span, "cmpxchg ptr")?.into_pointer_value();
-                            let expected = self.gen_value(&args[1])?.scalar(*span, "cmpxchg expected")?
+                            let expected = self.gen_value(&args[1])?.scalar(*span, "cmpxchg expected")?;
+                            let expected = self
+                                .coerce(expected, &self.i32_ty.into(), *span, "cmpxchg expected")?
                                 .into_int_value();
-                            let desired = self.gen_value(&args[2])?.scalar(*span, "cmpxchg desired")?
+                            let desired = self.gen_value(&args[2])?.scalar(*span, "cmpxchg desired")?;
+                            let desired = self
+                                .coerce(desired, &self.i32_ty.into(), *span, "cmpxchg desired")?
                                 .into_int_value();
                             let pair = bld(self.builder.build_cmpxchg(
                                 ptr, expected, desired,

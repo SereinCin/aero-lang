@@ -1386,6 +1386,72 @@ fn blas_wrong_arg_count_rejected() {
     assert!(stderr(&out).contains("axpy"));
 }
 
+// ---------- Match guard on a bound value ----------
+
+#[test]
+fn match_guard_can_read_scalar_binding() {
+    let out = run_aero(
+        "fn classify(n: i64) -> i64 {\n\
+             let mut out = -1;\n\
+             match (n) {\n\
+                 0 => { out = 100; }\n\
+                 v if v > 10 => { out = 200; }\n\
+                 v => { out = 300; }\n\
+             }\n\
+             return out;\n\
+         }\n\
+         print(\"%d %d %d\", classify(0), classify(50), classify(5));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "100 200 300");
+}
+
+#[test]
+fn match_guard_can_read_tuple_bindings() {
+    let out = run_aero(
+        "fn pick(t: (i64, i64, i64)) -> i64 {\n\
+             let mut r = 0;\n\
+             match (t) {\n\
+                 (a, b, c) if a > b => { r = a + c; }\n\
+                 (a, b, c) => { r = b + c; }\n\
+             }\n\
+             return r;\n\
+         }\n\
+         print(\"%d %d\", pick((5, 2, 1)), pick((1, 2, 3)));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "6 5");
+}
+
+// ---------- volatile / atomic builtins ----------
+
+#[test]
+fn volatile_and_atomic_round_trip() {
+    let out = run_aero(
+        "extern \"C\" fn malloc(n: i64) -> *i32 = \"malloc\";\n\
+         let p = malloc(4);\n\
+         volatile_store_i32(p, 5);\n\
+         print(\"%d\", volatile_load_i32(p));\n\
+         atomic_store_release_i32(p, 9);\n\
+         print(\" %d\", atomic_load_acquire_i32(p));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "5 9");
+}
+
+#[test]
+fn atomic_cmpxchg_writes_desired_on_match() {
+    let out = run_aero(
+        "extern \"C\" fn malloc(n: i64) -> *i32 = \"malloc\";\n\
+         let p = malloc(4);\n\
+         atomic_store_release_i32(p, 9);\n\
+         let old = atomic_cmpxchg_i32(p, 9, 11);\n\
+         print(\"%d %d\", old, atomic_load_acquire_i32(p));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "9 11");
+}
+
 // ---------- Reverse-mode automatic differentiation (AD) ----------
 
 #[test]
