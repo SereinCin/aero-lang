@@ -3520,3 +3520,23 @@ print("%lld\n", fib(10));
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn let_inside_loop_does_not_grow_the_stack() {
+    // Every local lives in a stack slot that `aero run` (JIT) never promotes to a
+    // register, so a `let` inside a loop used to reserve fresh stack on each
+    // iteration and overflow on long loops. 500k iterations at 8 bytes apiece is
+    // far past the default stack if the slot is not hoisted out of the loop.
+    let src = r#"
+let i = 0;
+let s = 0;
+while (i < 500000) {
+    let t = i;
+    s = s + t;
+    i = i + 1;
+}
+print("%d\n", s);
+"#;
+    let out = run_aero(src);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "124999750000\n");
+}

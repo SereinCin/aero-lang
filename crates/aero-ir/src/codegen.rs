@@ -29,7 +29,7 @@ fn mono_name(fn_name: &str, type_args: &[Ty]) -> String {
 }
 use aero_parse::ast::{BinOp, CmpOp, LogicOp, UnOp};
 use aero_parse::span::Span;
-use inkwell::builder::Builder;
+use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::debug_info::{
     AsDIScope, DIFlags, DIFlagsConstants, DISubprogram, DWARFEmissionKind, DWARFSourceLanguage,
@@ -38,9 +38,10 @@ use inkwell::debug_info::{
 use inkwell::module::{FlagBehavior, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
-    PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+    IntValue, PointerValue,
 };
+use inkwell::basic_block::BasicBlock;
 use inkwell::{AddressSpace, AtomicOrdering, DLLStorageClass, FloatPredicate, GlobalVisibility, IntPredicate};
 
 // P1.4x: 直调 LLVM C API 绕开 inkwell build_indirect_call 空 Vec segfault（Windows 0xC0000005）
@@ -912,6 +913,7 @@ pub fn compile<'ctx>(
         context,
         module: &module,
         builder,
+        entry_bb: None,
         i64_ty,
         i32_ty,
         bool_ty,
@@ -984,8 +986,13 @@ pub fn compile<'ctx>(
         di_scope: None,
     };
 
+    // Two blocks: `allocas` holds every stack slot and runs once, `entry` is the
+    // body. Without this a `let` inside a loop reserves a new stack slot on every
+    // iteration; the JIT applies no mem2reg to clean that up.
+    let allocas = context.append_basic_block(main, "allocas");
     let entry = context.append_basic_block(main, "entry");
     cg.builder.position_at_end(entry);
+    cg.entry_bb = Some(allocas);
     if freestanding && !program.main.stmts.is_empty() {
         return Err(CodegenError {
             msg: "freestanding mode does not allow top-level statements; mark an entry #[entry] function and put all executable code there".to_string(),
@@ -1030,6 +1037,10 @@ pub fn compile<'ctx>(
         let zero = cg.i64_ty.const_zero();
         bld(cg.builder.build_return(Some(&zero)))?;
     }
+    // Every slot has been emitted into `allocas` by now, so wire it to the body.
+    cg.builder.position_at_end(allocas);
+    bld(cg.builder.build_unconditional_branch(entry))?;
+    cg.entry_bb = None;
     // Generate the main block
     for i in 0..program.funcs.len() {
         if program.funcs[i].builtin
@@ -1333,7 +1344,7 @@ fn gen_python_glue<'ctx>(
         let fmt_ptr = bld(cg.builder.build_global_string_ptr(&fmt, "pyfmt"))?;
         let mut slots = Vec::new();
         for slot_ty in &slot_tys {
-            slots.push(bld(cg.builder.build_alloca(*slot_ty, "pyarg"))?);
+            slots.push(bld(cg.alloca_slot(*slot_ty, "pyarg"))?);
         }
         // PyArg_ParseTuple(args, fmt, &a1, ..., &an)
         let mut parse_args = vec![args_ptr.into(), fmt_ptr.as_pointer_value().into()];
@@ -1390,7 +1401,7 @@ fn gen_python_glue<'ctx>(
                         &[i8p.into(), i64_ty.into(), i64_ty.into()],
                         false,
                     );
-                    let tmp = bld(cg.builder.build_alloca(str_ty, "py_str"))?;
+                    let tmp = bld(cg.alloca_slot(str_ty, "py_str"))?;
                     // Allocate len+1 and NUL-terminate so the resulting String is a
                     // valid C string: `len()`/strlen-based builtins and passing the
                     // String to a `str` parameter would otherwise overread the copy.
@@ -1709,7 +1720,7 @@ fn build_cov_fini<'ctx>(
 
     // init: i = 0
     cg.builder.position_at_end(init);
-    let ivar = bld(cg.builder.build_alloca(i64_ty, "cov_i"))?;
+    let ivar = bld(cg.alloca_slot(i64_ty, "cov_i"))?;
     bld(cg.builder.build_store(ivar, i64_ty.const_zero()))?;
     bld(cg.builder.build_unconditional_branch(head))?;
 
@@ -2166,6 +2177,10 @@ struct Codegen<'a, 'ctx> {
     /// Module reference (generic instance functions are added on demand)
     module: &'a Module<'ctx>,
     builder: Builder<'ctx>,
+    /// Entry block of the function being generated. Every stack slot is created
+    /// here, so a `let` inside a loop reuses one slot instead of growing the
+    /// stack once per iteration.
+    entry_bb: Option<BasicBlock<'ctx>>,
     i64_ty: IntType<'ctx>,
     i32_ty: IntType<'ctx>,
     bool_ty: IntType<'ctx>,
@@ -2416,8 +2431,10 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
     fn gen_function(&mut self, f: &HirFn, func_llvm: FunctionValue<'ctx>) -> Result<(), CodegenError> {
         self.cur_func = func_llvm;
         self.cur_ret = f.ret.clone();
+        let allocas = self.context.append_basic_block(func_llvm, "allocas");
         let entry = self.context.append_basic_block(func_llvm, "entry");
         self.builder.position_at_end(entry);
+        let prev_entry = self.entry_bb.replace(allocas);
         // Debug info: attach a DISubprogram so the debugger maps this function back to
         // its source line, and remember it as the scope for this function's statements.
         self.di_attach_function(&f.name, f.span, func_llvm);
@@ -2425,7 +2442,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         self.decl_order.clear();
         for (i, (_, _, _sp)) in f.params.iter().enumerate() {
             let param_val = func_llvm.get_nth_param(i as u32).expect("parameter exists");
-            let ptr = bld(self.builder.build_alloca(param_val.get_type(), "arg"))?;
+            let ptr = bld(self.alloca_slot(param_val.get_type(), "arg"))?;
             bld(self.builder.build_store(ptr, param_val))?;
             self.vars.insert(f.param_defs[i], ptr);
             self.decl_order.push(f.param_defs[i]);
@@ -2449,7 +2466,33 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 }
             }
         }
+        // Every slot has been emitted into `allocas` by now, so wire it to the body.
+        self.builder.position_at_end(allocas);
+        bld(self.builder.build_unconditional_branch(entry))?;
+        self.entry_bb = prev_entry;
         Ok(())
+    }
+
+    /// Create a stack slot in the current function's entry block. Locals are
+    /// always allocated there so a `let` inside a loop reuses one slot instead
+    /// of reserving new stack on every iteration (the JIT runs no mem2reg).
+    fn alloca_slot(
+        &self,
+        ty: impl BasicType<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, BuilderError> {
+        match self.entry_bb {
+            Some(entry) => {
+                let saved = self.builder.get_insert_block();
+                self.builder.position_at_end(entry);
+                let slot = self.builder.build_alloca(ty, name);
+                if let Some(bb) = saved {
+                    self.builder.position_at_end(bb);
+                }
+                slot
+            }
+            None => self.builder.build_alloca(ty, name),
+        }
     }
 
     // skip if already terminated
@@ -2737,8 +2780,8 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 if let Ty::Arena(size) = &ty {
                     // Arena init: byte pool + offset slot (offset zeroed)
                     let buf_ty = self.context.i8_type().array_type(*size as u32);
-                    let buf = bld(self.builder.build_alloca(buf_ty, "arena_buf"))?;
-                    let offset = bld(self.builder.build_alloca(self.i64_ty, "arena_off"))?;
+                    let buf = bld(self.alloca_slot(buf_ty, "arena_buf"))?;
+                    let offset = bld(self.alloca_slot(self.i64_ty, "arena_off"))?;
                     bld(self.builder.build_store(offset, self.i64_ty.const_zero()))?;
                     self.arenas.insert(
                         *def_id,
@@ -2757,7 +2800,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 }
                 if is_agg(&ty) {
                     // Aggregate: literals fill the target type directly; others (variable refs) deep-copy
-                    let target = bld(self.builder.build_alloca(
+                    let target = bld(self.alloca_slot(
                         self.t(&ty, *span)?,
                         "agg",
                     ))?;
@@ -2765,7 +2808,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     self.gen_agg_store(target, init, &ty, *span, "let initializer")?;
                 } else {
                     let slot_ty = self.t(&ty, *span)?;
-                    let ptr = bld(self.builder.build_alloca(slot_ty, "var"))?;
+                    let ptr = bld(self.alloca_slot(slot_ty, "var"))?;
                     let v = self.gen_value(init)?.scalar(*span, "let initializer")?;
                     let v = self.coerce(v, &slot_ty, *span, "let initializer")?;
                     bld(self.builder.build_store(ptr, v))?;
@@ -2975,7 +3018,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             .append_basic_block(self.cur_func, "for.end");
 
                         // Initialize index = 0
-                        let idx_ptr = bld(self.builder.build_alloca(self.i64_ty, "for.idx"))?;
+                        let idx_ptr = bld(self.alloca_slot(self.i64_ty, "for.idx"))?;
                         bld(self.builder.build_store(idx_ptr, self.i64_ty.const_zero()))?;
 
                         bld(self.builder.build_unconditional_branch(cond_bb))?;
@@ -3007,7 +3050,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         let elem_val =
                             bld(self.builder.build_load(elem_llvm_ty, elem_ptr, "for.elem.val"))?;
                         let elem_slot =
-                            bld(self.builder.build_alloca(elem_llvm_ty, "for.elem.slot"))?;
+                            bld(self.alloca_slot(elem_llvm_ty, "for.elem.slot"))?;
                         bld(self.builder.build_store(elem_slot, elem_val))?;
                         self.vars.insert(*var_def, elem_slot);
 
@@ -3072,7 +3115,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             .context
                             .append_basic_block(self.cur_func, "for.end");
 
-                        let idx_ptr = bld(self.builder.build_alloca(self.i64_ty, "for.idx"))?;
+                        let idx_ptr = bld(self.alloca_slot(self.i64_ty, "for.idx"))?;
                         bld(self.builder.build_store(idx_ptr, self.i64_ty.const_zero()))?;
                         bld(self.builder.build_unconditional_branch(cond_bb))?;
 
@@ -3118,7 +3161,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         let elem_val =
                             bld(self.builder.build_load(elem_llvm_ty, elem_ptr, "for.elem.val"))?;
                         let elem_slot =
-                            bld(self.builder.build_alloca(elem_llvm_ty, "for.elem.slot"))?;
+                            bld(self.alloca_slot(elem_llvm_ty, "for.elem.slot"))?;
                         bld(self.builder.build_store(elem_slot, elem_val))?;
                         self.vars.insert(*var_def, elem_slot);
 
@@ -3163,7 +3206,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
 
                         // 1) `let mut it = iter.into_iter();`
                         let it_llvm = self.t(&it_ty, *span)?;
-                        let it_slot = bld(self.builder.build_alloca(it_llvm, "for.it"))?;
+                        let it_slot = bld(self.alloca_slot(it_llvm, "for.it"))?;
                         let into_iter_params = into_iter_func.get_type().get_param_types();
                         let rpt: BasicTypeEnum = into_iter_params[0]
                             .try_into()
@@ -3178,7 +3221,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         match out.try_as_basic_value().basic() {
                             Some(v) => {
                                 if is_agg(&it_ty) {
-                                    let tmp = bld(self.builder.build_alloca(
+                                    let tmp = bld(self.alloca_slot(
                                         v.get_type(),
                                         "for.it.tmp",
                                     ))?;
@@ -3211,7 +3254,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             .context
                             .append_basic_block(self.cur_func, "for.end");
 
-                        let o_slot = bld(self.builder.build_alloca(option_llvm, "for.opt"))?;
+                        let o_slot = bld(self.alloca_slot(option_llvm, "for.opt"))?;
                         bld(self.builder.build_unconditional_branch(cond_bb))?;
 
                         self.builder.position_at_end(cond_bb);
@@ -3254,7 +3297,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                                 "for.pay",
                             )
                         })?;
-                        let x_slot = bld(self.builder.build_alloca(item_llvm, "for.x"))?;
+                        let x_slot = bld(self.alloca_slot(item_llvm, "for.x"))?;
                         if is_agg(&item_ty) {
                             let n = aero_size(
                                 &item_ty,
@@ -3357,8 +3400,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             // guard can reference the binding.
                             if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
                                 let slot = bld(
-                                    self.builder
-                                        .build_alloca(scrut_val.get_type(), "match.bind"),
+                                    self.alloca_slot(scrut_val.get_type(), "match.bind"),
                                 )?;
                                 bld(self.builder.build_store(slot, scrut_val))?;
                                 self.vars.insert(*def_id, slot);
@@ -3492,8 +3534,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
                         if !self.vars.contains_key(def_id) {
                             let slot = bld(
-                                self.builder
-                                    .build_alloca(scrut_val.get_type(), "match.bind"),
+                                self.alloca_slot(scrut_val.get_type(), "match.bind"),
                             )?;
                             bld(self.builder.build_store(slot, scrut_val))?;
                             self.vars.insert(*def_id, slot);
@@ -3584,7 +3625,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     // Bind the whole enum value before the guard is evaluated so a
                     // guard can reference the binding.
                     if let HirMatchPattern::Bind(_, def_id) = &arm.pattern {
-                        let slot = bld(self.builder.build_alloca(enum_llvm, "enum.bind"))?;
+                        let slot = bld(self.alloca_slot(enum_llvm, "enum.bind"))?;
                         self.copy_agg(slot, scrut_ptr, &enum_ty, span, "enum match bind")?;
                         self.vars.insert(*def_id, slot);
                     }
@@ -3686,7 +3727,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     // Bind the whole enum value into a fresh slot (a guard may have
                     // already done this during dispatch).
                     if !self.vars.contains_key(def_id) {
-                        let slot = bld(self.builder.build_alloca(enum_llvm, "enum.bind"))?;
+                        let slot = bld(self.alloca_slot(enum_llvm, "enum.bind"))?;
                         self.copy_agg(slot, scrut_ptr, &enum_ty, span, "enum match bind")?;
                         self.vars.insert(*def_id, slot);
                     }
@@ -3712,7 +3753,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             None => raw_pt,
                         };
                         let pt_llvm = self.t(&pt, arm.span)?;
-                        let slot = bld(self.builder.build_alloca(pt_llvm, "enum.bind.pay"))?;
+                        let slot = bld(self.alloca_slot(pt_llvm, "enum.bind.pay"))?;
                         let pay_ptr = bld(unsafe {
                             self.builder.build_in_bounds_gep(
                                 enum_llvm,
@@ -3839,7 +3880,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             let elem_ty = &elem_tys[j];
                             let elem_ptr = elem_ptrs[j];
                             let elem_llvm = self.t(elem_ty, arm_span)?;
-                            let slot = bld(self.builder.build_alloca(
+                            let slot = bld(self.alloca_slot(
                                 elem_llvm, &format!("tuple.elem{j}.prebind"),
                             ))?;
                             if is_agg(elem_ty) {
@@ -3931,7 +3972,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             match &arm.pattern {
                 HirMatchPattern::Bind(_, def_id) => {
                     // Bind the whole tuple into a slot
-                    let slot = bld(self.builder.build_alloca(tuple_llvm, "tuple.bind"))?;
+                    let slot = bld(self.alloca_slot(tuple_llvm, "tuple.bind"))?;
                     let n = aero_size(
                         &scrut_ty,
                         self.hir_structs,
@@ -3949,7 +3990,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                             let elem_ty = &elem_tys[j];
                             let elem_ptr = elem_ptrs[j];
                             let elem_llvm = self.t(elem_ty, arm.span)?;
-                            let slot = bld(self.builder.build_alloca(
+                            let slot = bld(self.alloca_slot(
                                 elem_llvm, &format!("tuple.elem{j}.bind"),
                             ))?;
                             if is_agg(elem_ty) {
@@ -4108,7 +4149,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
         let enum_llvm = self.t(&enum_ty, span)?;
         let ok_llvm = self.t(&ok_ty, span)?;
         // Slot holding the unwrapped `Ok` payload, read by the join block.
-        let ok_slot = bld(self.builder.build_alloca(ok_llvm, "try.ok"))?;
+        let ok_slot = bld(self.alloca_slot(ok_llvm, "try.ok"))?;
 
         // Load the variant tag (field 0 of the tagged union).
         let tag_ptr = bld(unsafe {
@@ -4170,7 +4211,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             )
         })?;
         let err_val = if is_agg(&err_ty) {
-            let slot = bld(self.builder.build_alloca(err_llvm, "try.err"))?;
+            let slot = bld(self.alloca_slot(err_llvm, "try.err"))?;
             let n = aero_size(&err_ty, self.hir_structs, self.hir_unions, self.hir_enums, &self.type_subst);
             self.emit_memcpy(slot, err_ptr, n, span, "try err payload")?;
             GenValue::Agg(slot)
@@ -4188,7 +4229,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
             self.internal_err(span, "`?` used outside a `Result<_, E>`-returning function")
         })?;
         let ret_llvm = self.t(&ret_ty, span)?;
-        let ret_slot = bld(self.builder.build_alloca(ret_llvm, "try.ret"))?;
+        let ret_slot = bld(self.alloca_slot(ret_llvm, "try.ret"))?;
         let ret_tag = bld(unsafe {
             self.builder.build_in_bounds_gep(
                 ret_llvm,
@@ -4782,7 +4823,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 // Dereferencing an aggregate yields the whole value; keep it addressable
                 // (Agg) so field access / indexing works on `(*ptr).field`.
                 if is_agg(&inner_ty) {
-                    let tmp = bld(self.builder.build_alloca(slot_ty, "deref.agg"))?;
+                    let tmp = bld(self.alloca_slot(slot_ty, "deref.agg"))?;
                     bld(self.builder.build_store(tmp, loaded))?;
                     Ok(GenValue::Agg(tmp))
                 } else {
@@ -4806,7 +4847,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                     shape: dims.clone(),
                 };
                 let llvm = self.t(&ty, *span)?;
-                let tmp = bld(self.builder.build_alloca(llvm, "tensor"))?;
+                let tmp = bld(self.alloca_slot(llvm, "tensor"))?;
                 self.store_zero_agg(tmp, &ty, *span)?;
                 Ok(GenValue::Agg(tmp))
             }
@@ -4826,7 +4867,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 };
                 let llvm_elem = self.t(&elem_ty, *span)?;
                 let arr_ty = llvm_elem.array_type(elems.len() as u32);
-                let tmp = bld(self.builder.build_alloca(arr_ty, "array"))?;
+                let tmp = bld(self.alloca_slot(arr_ty, "array"))?;
                 for (i, e) in elems.iter().enumerate() {
                     let idx = self.i32_ty.const_int(i as u64, false);
                     let slot = bld(unsafe {
@@ -4859,7 +4900,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         .collect::<Result<Vec<_>, _>>()?,
                     false,
                 );
-                let tmp = bld(self.builder.build_alloca(struct_ty, "tuple"))?;
+                let tmp = bld(self.alloca_slot(struct_ty, "tuple"))?;
                 for (i, e) in elems.iter().enumerate() {
                     let elem_ty = self.t(&tys[i], *span)?;
                     let v = self.gen_value(e)?.scalar(*span, "tuple element")?;
@@ -4882,7 +4923,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 // bitcast to the field's type and store the single set field.
                 if let Some(def) = self.hir_unions.iter().find(|u| u.name == *name) {
                     let union_ty = self.t(&Ty::Union(name.clone()), *span)?;
-                    let tmp = bld(self.builder.build_alloca(union_ty, "union"))?;
+                    let tmp = bld(self.alloca_slot(union_ty, "union"))?;
                     debug_assert_eq!(fields.len(), 1, "infer enforces one field per union literal");
                     let (fname, fval) = &fields[0];
                     let fty = def
@@ -4952,7 +4993,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         subst,
                     )
                 };
-                let tmp = bld(self.builder.build_alloca(struct_ty, "struct"))?;
+                let tmp = bld(self.alloca_slot(struct_ty, "struct"))?;
                 for (fname, fval) in fields {
                     let (idx, fty) = def
                         .find_field(fname)
@@ -5055,7 +5096,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                         payload,
                     )
                 };
-                let tmp = bld(self.builder.build_alloca(enum_llvm, "enum"))?;
+                let tmp = bld(self.alloca_slot(enum_llvm, "enum"))?;
                 // Store the tag (variant index)
                 let tag_ptr = bld(unsafe {
                     self.builder.build_in_bounds_gep(
@@ -5196,7 +5237,7 @@ impl<'a, 'ctx> Codegen<'a, 'ctx> {
                 // Division / remainder by zero traps on x86 (SIGFPE) and would otherwise
                 // crash the whole process. Guard it: check `r == 0` and emit 0 instead.
                 if matches!(op, BinOp::Div | BinOp::Rem) {
-                    let out_slot = bld(self.builder.build_alloca(l_ty, "div_res"))?;
+                    let out_slot = bld(self.alloca_slot(l_ty, "div_res"))?;
                     let is_zero = bld(self.builder.build_int_compare(
                         IntPredicate::EQ,
                         r,
@@ -6309,7 +6350,7 @@ _ => {
                             BasicTypeEnum::ArrayType(_) | BasicTypeEnum::StructType(_)
                         );
                         if is_agg {
-                            let tmp = bld(self.builder.build_alloca(v.get_type(), "call_ret"))?;
+                            let tmp = bld(self.alloca_slot(v.get_type(), "call_ret"))?;
                             bld(self.builder.build_store(tmp, v))?;
                             Ok(GenValue::Agg(tmp))
                         } else {
@@ -6378,7 +6419,7 @@ _ => {
                 // Scalar payload: store into a temp slot then memcpy, so the heap
                 // copy is byte-identical to the concrete type's layout.
                 let slot_ty = self.t(&target_ty, span)?;
-                let tmp = bld(self.builder.build_alloca(slot_ty, "dyn_tmp"))?;
+                let tmp = bld(self.alloca_slot(slot_ty, "dyn_tmp"))?;
                 bld(self.builder.build_store(tmp, v))?;
                 self.emit_memcpy(data, tmp, size, span, "dyn box")?;
             }
@@ -6389,7 +6430,7 @@ _ => {
 
         // 3. Build the fat pointer `{ data, vtable }`.
         let dyn_llvm = self.t(ty, span)?;
-        let fat = bld(self.builder.build_alloca(dyn_llvm, "dyn_fat"))?;
+        let fat = bld(self.alloca_slot(dyn_llvm, "dyn_fat"))?;
         let d_slot = bld(unsafe {
             self.builder.build_in_bounds_gep(
                 dyn_llvm,
@@ -6570,7 +6611,7 @@ _ => {
 
         // Load the fat pointer, then its `data` (field 0) and `vtable` (field 1).
         let fat = self.gen_value(recv)?.scalar(span, "dyn receiver")?;
-        let fat_slot = bld(self.builder.build_alloca(dyn_llvm, "dyn_recv"))?;
+        let fat_slot = bld(self.alloca_slot(dyn_llvm, "dyn_recv"))?;
         bld(self.builder.build_store(fat_slot, fat))?;
         let data_slot = bld(unsafe {
             self.builder.build_in_bounds_gep(
@@ -6641,7 +6682,7 @@ _ => {
                     BasicTypeEnum::ArrayType(_) | BasicTypeEnum::StructType(_)
                 );
                 if is_agg {
-                    let tmp = bld(self.builder.build_alloca(v.get_type(), "dyn_ret"))?;
+                    let tmp = bld(self.alloca_slot(v.get_type(), "dyn_ret"))?;
                     bld(self.builder.build_store(tmp, v))?;
                     Ok(Some(GenValue::Agg(tmp)))
                 } else {
@@ -7069,13 +7110,13 @@ _ => {
             shape: res_shape,
         };
         let res_llvm = self.t(&res_ty, span)?;
-        let res = bld(self.builder.build_alloca(res_llvm, "matmul"))?;
+        let res = bld(self.alloca_slot(res_llvm, "matmul"))?;
 
         // Result [M x [N x elem]]
-        let i_slot = bld(self.builder.build_alloca(self.i64_ty, "mm_i"))?;
-        let j_slot = bld(self.builder.build_alloca(self.i64_ty, "mm_j"))?;
-        let k_slot = bld(self.builder.build_alloca(self.i64_ty, "mm_k"))?;
-        let sum_slot = bld(self.builder.build_alloca(elem_llvm, "mm_sum"))?;
+        let i_slot = bld(self.alloca_slot(self.i64_ty, "mm_i"))?;
+        let j_slot = bld(self.alloca_slot(self.i64_ty, "mm_j"))?;
+        let k_slot = bld(self.alloca_slot(self.i64_ty, "mm_k"))?;
+        let sum_slot = bld(self.alloca_slot(elem_llvm, "mm_sum"))?;
         let zero = self.i64_ty.const_zero();
         let one = self.i64_ty.const_int(1, false);
         let elem_zero = elem_llvm.const_zero();
@@ -7228,8 +7269,8 @@ _ => {
         let input_llvm = self.t(&input_ty, span)?;
         let is_float = matches!(elem, Ty::F32 | Ty::F64);
 
-        let acc_slot = bld(self.builder.build_alloca(elem_llvm, "reduce_acc"))?;
-        let f_slot = bld(self.builder.build_alloca(self.i64_ty, "reduce_f"))?;
+        let acc_slot = bld(self.alloca_slot(elem_llvm, "reduce_acc"))?;
+        let f_slot = bld(self.alloca_slot(self.i64_ty, "reduce_f"))?;
         let zero = self.i64_ty.const_zero();
         let one = self.i64_ty.const_int(1, false);
         let total_c = self.i64_ty.const_int(total, false);
@@ -7379,8 +7420,8 @@ _ => {
         };
 
         let res_llvm = self.t(&lhs_ty, span)?;
-        let res = bld(self.builder.build_alloca(res_llvm, "elemwise"))?;
-        let f_slot = bld(self.builder.build_alloca(self.i64_ty, "ew_f"))?;
+        let res = bld(self.alloca_slot(res_llvm, "elemwise"))?;
+        let f_slot = bld(self.alloca_slot(self.i64_ty, "ew_f"))?;
         let zero = self.i64_ty.const_zero();
         let one = self.i64_ty.const_int(1, false);
         let total_c = self.i64_ty.const_int(total, false);
@@ -7548,8 +7589,8 @@ _ => {
         // Scalar-accumulator ops (dot / nrm2 / asum / amax): loop and reduce.
         if matches!(op, BlasOp::Dot | BlasOp::Nrm2 | BlasOp::Asum | BlasOp::Amax) {
             // amax accumulates index + current max |value|; others accumulate a scalar.
-            let acc_slot = bld(self.builder.build_alloca(elem_llvm, "bl_acc"))?;
-            let f_slot = bld(self.builder.build_alloca(self.i64_ty, "bl_f"))?;
+            let acc_slot = bld(self.alloca_slot(elem_llvm, "bl_acc"))?;
+            let f_slot = bld(self.alloca_slot(self.i64_ty, "bl_f"))?;
             let init: BasicValueEnum = if is_float {
                 elem_llvm.into_float_type().const_float(0.0).into()
             } else {
@@ -7558,7 +7599,7 @@ _ => {
             bld(self.builder.build_store(acc_slot, init))?;
             // amax tracks the best index too.
             let amax_idx_slot = if op == BlasOp::Amax {
-                Some(bld(self.builder.build_alloca(self.i64_ty, "bl_best"))?)
+                Some(bld(self.alloca_slot(self.i64_ty, "bl_best"))?)
             } else {
                 None
             };
@@ -7749,8 +7790,8 @@ _ => {
         // Tensor-returning ops (scal / axpy): blas_scal(alpha, x),
         // blas_axpy(alpha, x, y) -> same-shape tensor.
         let res_llvm = self.t(&tensor_ty, span)?;
-        let res = bld(self.builder.build_alloca(res_llvm, "blas"))?;
-        let f_slot = bld(self.builder.build_alloca(self.i64_ty, "bl_tf"))?;
+        let res = bld(self.alloca_slot(res_llvm, "blas"))?;
+        let f_slot = bld(self.alloca_slot(self.i64_ty, "bl_tf"))?;
         bld(self.builder.build_store(f_slot, zero))?;
         let y_ptr: Option<PointerValue<'ctx>> = match op {
             BlasOp::Axpy => {
@@ -8774,7 +8815,7 @@ _ => {
             })?;
         let elem = substitute(&raw[0], &self.type_subst);
         let vec_llvm = self.t(&Ty::Vec(Box::new(elem.clone())), span)?;
-        let tmp = bld(self.builder.build_alloca(vec_llvm, "vec"))?;
+        let tmp = bld(self.alloca_slot(vec_llvm, "vec"))?;
         let zero = self.i32_ty.const_zero();
         let one = self.i32_ty.const_int(1, false);
         let two = self.i32_ty.const_int(2, false);
@@ -8841,7 +8882,7 @@ _ => {
         span: Span,
     ) -> Result<GenValue<'ctx>, CodegenError> {
         let str_llvm = self.t(&Ty::String, span)?;
-        let tmp = bld(self.builder.build_alloca(str_llvm, "str"))?;
+        let tmp = bld(self.alloca_slot(str_llvm, "str"))?;
         let i64t = self.i64_ty;
         let i8_ptr = self.context.ptr_type(AddressSpace::from(0u16));
         let i8t = self.context.i8_type();
@@ -8983,7 +9024,7 @@ _ => {
         let v = self.gen_value(value)?;
         let src_ptr = match v {
             GenValue::Scalar(s) => {
-                let slot = bld(self.builder.build_alloca(inner_llvm, "box_tmp"))?;
+                let slot = bld(self.alloca_slot(inner_llvm, "box_tmp"))?;
                 bld(self.builder.build_store(slot, s))?;
                 slot
             }
@@ -9384,7 +9425,7 @@ _ => {
                         BasicTypeEnum::ArrayType(_) | BasicTypeEnum::StructType(_)
                     );
                     if is_agg {
-                        let tmp = bld(self.builder.build_alloca(v.get_type(), "call_ret"))?;
+                        let tmp = bld(self.alloca_slot(v.get_type(), "call_ret"))?;
                         bld(self.builder.build_store(tmp, v))?;
                         Ok(Some(GenValue::Agg(tmp)))
                     } else {
@@ -9641,7 +9682,7 @@ _ => {
                     return Err(err("`pop` takes no arguments".to_string()));
                 }
                 // Result slot: zero-initialized on an empty vector, else the last element.
-                let tmp = bld(self.builder.build_alloca(elem_llvm, "vec_pop_tmp"))?;
+                let tmp = bld(self.alloca_slot(elem_llvm, "vec_pop_tmp"))?;
                 let len = bld(self.builder.build_load(i64t, len_slot, "vlen"))?.into_int_value();
                 let empty = bld(self.builder.build_int_compare(
                     IntPredicate::EQ,
@@ -9730,7 +9771,7 @@ _ => {
                 ))?;
                 let in_bounds = bld(self.builder.build_and(idx_ge0, idx_ltlen, "vin_bounds"))?;
                 // Shared result slot, zero-initialized so the OOB path returns a default.
-                let res = bld(self.builder.build_alloca(elem_llvm, "vec_get_res"))?;
+                let res = bld(self.alloca_slot(elem_llvm, "vec_get_res"))?;
                 let res8 = bld(self.builder.build_pointer_cast(
                     res,
                     i8_ptr,
@@ -9951,7 +9992,7 @@ _ => {
                 let v = bld(self.builder.build_load(inner_llvm, slot, "box_deref"))?;
                 // Aggregate contents are returned through an alloca slot.
                 if is_agg(inner) {
-                    let tmp = bld(self.builder.build_alloca(inner_llvm, "box_deref_tmp"))?;
+                    let tmp = bld(self.alloca_slot(inner_llvm, "box_deref_tmp"))?;
                     bld(self.builder.build_store(tmp, v))?;
                     Ok(Some(GenValue::Agg(tmp)))
                 } else {
@@ -10091,7 +10132,7 @@ _ => {
                     i64t.const_zero(),
                     "spop_empty",
                 ))?;
-                let tmp = bld(self.builder.build_alloca(i64t, "str_pop_tmp"))?;
+                let tmp = bld(self.alloca_slot(i64t, "str_pop_tmp"))?;
                 let empty_bb = self.context.append_basic_block(self.cur_func, "str_pop_empty");
                 let load_bb = self.context.append_basic_block(self.cur_func, "str_pop_load");
                 let join_bb = self.context.append_basic_block(self.cur_func, "str_pop_join");
@@ -10182,8 +10223,8 @@ _ => {
                     i64t.const_zero(),
                     "u8pop_empty",
                 ))?;
-                let tmp = bld(self.builder.build_alloca(i64t, "utf8_pop_tmp"))?;
-                let out_len = bld(self.builder.build_alloca(i64t, "utf8_pop_outlen"))?;
+                let tmp = bld(self.alloca_slot(i64t, "utf8_pop_tmp"))?;
+                let out_len = bld(self.alloca_slot(i64t, "utf8_pop_outlen"))?;
                 let empty_bb = self.context.append_basic_block(self.cur_func, "u8pop_empty");
                 let load_bb = self.context.append_basic_block(self.cur_func, "u8pop_load");
                 let join_bb = self.context.append_basic_block(self.cur_func, "u8pop_join");
@@ -10317,7 +10358,7 @@ _ => {
                     .ok_or_else(|| self.internal_err(span, "strlen returned no value"))?
                     .into_int_value();
                 let too_short = bld(self.builder.build_int_compare(IntPredicate::ULT, len, slen, "ew_short"))?;
-                let tmp = bld(self.builder.build_alloca(i64t, "ew_tmp"))?;
+                let tmp = bld(self.alloca_slot(i64t, "ew_tmp"))?;
                 let short_bb = self.context.append_basic_block(self.cur_func, "ew_short");
                 let cmp_bb = self.context.append_basic_block(self.cur_func, "ew_cmp");
                 let join_bb = self.context.append_basic_block(self.cur_func, "ew_join");
