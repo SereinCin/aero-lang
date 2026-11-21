@@ -13,7 +13,7 @@ echo.
 echo   1. Go to GitHub Releases page:
 echo      https://github.com/SereinCin/aero-lang/releases
 echo.
-echo   2. Download the latest Aero-*-win64.zip
+echo   2. Download aero-v1.2.6-windows-x86_64.zip
 echo.
 echo   3. Extract and copy aero.exe to this folder
 echo      (overwrite the old one)

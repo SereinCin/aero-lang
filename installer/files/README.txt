@@ -56,7 +56,9 @@ Ecosystem: https://github.com/SereinCin/Aero-packages
 SYSTEM REQUIREMENTS
 ----------------------------------------
   - Windows 10 or Windows 11 (64-bit)
-  - No dependencies required (static build)
+  - Microsoft Visual C++ 2015-2022 Redistributable (x64).
+    VCRUNTIME140.dll and the UCRT come with it; most machines
+    already have it via Windows Update.
 
 
 INSTALLATION
@@ -116,9 +118,9 @@ VS CODE EXTENSION (Optional)
   Extensions panel, or run:
      code --install-extension serein.aero-lang
 
-  Offline alternative: install aero-lang-1.2.2.vsix from the
-  aero-lang-vscode repository. Drag the .vsix file into the
-  VS Code Extensions panel.
+  Offline alternative: install the latest aero-lang-*.vsix
+  from the aero-lang-vscode repository. Drag the .vsix file
+  into the VS Code Extensions panel.
 
   After installing, set "aero.lsp.executablePath" to the full
   path of aero.exe to enable diagnostics, hover and
@@ -140,7 +142,7 @@ UNINSTALL
 
 FILES
 ----------------------------------------
-  aero.exe        Compiler executable (59 MB)
+  aero.exe        Compiler executable (67 MB)
   install.bat     Installation script
   uninstall.bat   Uninstallation script
   update.bat      Update guide

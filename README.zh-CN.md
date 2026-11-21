@@ -59,10 +59,17 @@ Aero 现在能做的事很窄：**把一段数值代码变成很小的原生库�
 aero --version
 ```
 
-**Linux / macOS**
+**Linux**
 
 ```bash
-curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.5/install_linux.sh | sh
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.6/install_linux.sh | sh
+aero --version
+```
+
+**macOS**
+
+```bash
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.6/install_macos.sh | sh
 aero --version
 ```
 
@@ -108,10 +115,17 @@ aero run <file.aero | package-dir>    编译并运行（JIT）
 aero build [file.aero | dir]          编译成独立可执行文件（AOT）
 aero check <file.aero>                只做语法/类型/借用检查
 aero new <name>                       新建包
-aero test [file.aero]                 跑测试
+aero test [file.aero]                 跑 tests/ 下的每个 .aero 程序
 aero bench <file.aero>                跑基准
 aero fmt <file.aero>                  格式化
 aero clippy <file.aero>               静态检查
+aero cov <file.aero>                  覆盖率报告（逐行命中次数）
+aero lock [dir]                       解析依赖并写入 Aero.lock
+aero install [name]                   安装生态仓库里的包
+aero publish <dir>                    把库包发布到 registry
+aero ls                               列出 registry 里的包
+aero registry                         打印 registry 位置
+aero lsp                              在 stdin/stdout 上跑 LSP 服务
 ```
 
 ## 这个项目怎么做的

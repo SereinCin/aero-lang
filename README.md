@@ -64,10 +64,17 @@ then open a **new** terminal:
 aero --version
 ```
 
-**Linux / macOS**
+**Linux**
 
 ```bash
 curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.6/install_linux.sh | sh
+aero --version
+```
+
+**macOS**
+
+```bash
+curl -sSL https://github.com/SereinCin/aero-lang/releases/download/v1.2.6/install_macos.sh | sh
 aero --version
 ```
 
@@ -115,10 +122,17 @@ aero run <file.aero | package-dir>    compile and run (JIT)
 aero build [file.aero | dir]          compile to a standalone executable (AOT)
 aero check <file.aero>                parse / type-check / borrow-check only
 aero new <name>                       create a package skeleton
-aero test [file.aero]                 run tests
+aero test [file.aero]                 run every .aero program under tests/
 aero bench <file.aero>                run benchmarks
 aero fmt <file.aero>                  format
 aero clippy <file.aero>               static analysis
+aero cov <file.aero>                  coverage report (statement hit counts)
+aero lock [dir]                       resolve dependencies, write Aero.lock
+aero install [name]                   install a package from the ecosystem
+aero publish <dir>                    publish a library to the registry
+aero ls                               list registry packages
+aero registry                         print the registry location
+aero lsp                              LSP server on stdin/stdout
 ```
 
 ## How this is built
