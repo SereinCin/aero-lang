@@ -1,7 +1,7 @@
 # Aero 编译器嵌入与 ABI 参考
 
 > 对应版本：Aero 1.2.6
-> 来源：`crates/aero-ir/src/aot.rs`、`crates/aero-ir/src/lib.rs`、`crates/aero-cli/src/main.rs`、`crates/aero-hir/src/lower.rs`、`crates/aero-parse/src/parser.rs`。
+> 本文档覆盖 CLI 构建参数、导出符号约定与 `aero-ir` crate 的公开 Rust API。
 
 ---
 
@@ -94,7 +94,7 @@ fn add(a: i64, b: i64) -> i64 {
 }
 ```
 
-`#[export]` 的函数签名会在 lowering 阶段校验 C ABI 兼容性（`crates/aero-hir/src/lower.rs`）。
+`#[export]` 的函数签名会在编译期校验 C ABI 兼容性，不兼容的参数类型直接报错。
 
 `#[py_export]` 的签名会额外校验可转换为 Python 对象的类型。
 
@@ -187,7 +187,7 @@ pub struct PyExtSpec<'a> {
 }
 ```
 
-位置：`compile_to_exe` / `compile_to_exe_linked` / `compile_to_shared` / `compile_to_pyext` / `compile_to_obj` 在 `crates/aero-ir/src/aot.rs`。
+以上函数都在 `aero_ir::aot` 模块里。
 
 ### 3.1 最小嵌入示例
 

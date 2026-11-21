@@ -18,7 +18,7 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **Closure bodies required a trailing `;`**: a block may now end with a bare expression
   (Rust-style tail expression), with or without the semicolon.
 - **Closure capture produced `internal error: variable has no stack slot`**: capturing an
-  outer variable is now rejected during lowering with an actionable message.
+  outer variable is now a compile error with an actionable message.
 - **`aero bench` measured dead code**: the generated harness now inserts
   `asm("", "~{memory}")` after each call so O2 dead-code elimination cannot remove the
   benchmarked body.
@@ -42,20 +42,19 @@ Patch release. Scope is strictly fixes — no new language surface.
   elementwise / BLAS Level-1 / reduction ops are implemented; autograd and
   `transpose` are not. README and `docs/api/language-api.md` now say so.
 
-### Fixed — dogfooding round 3 (silent wrong answers)
+### Fixed — silent wrong answers
 - **A trailing expression was never used as the return value**: `fn f(a: i64) -> i64 { a + 1 }`
-  evaluated `a + 1` and dropped it, so the function silently returned `0`. Blocks now
-  distinguish `Stmt::TailExpr` (no `;`, the block's value) from `Stmt::Expr`; a trailing
-  expression in a function body is lowered to an explicit `return`.
+  evaluated `a + 1` and dropped it, so the function silently returned `0`. A block that ends
+  with a bare expression now returns that expression; a trailing `;` still means "discard".
 - **`match` binding patterns did not exist**: `n => { ... }` was parsed as an enum variant
-  and rejected with `no enum defines a variant named n`, so `MatchPattern::Bind` in lowering
-  was dead code. A bare identifier starting with a lowercase letter is now a binding; an
-  uppercase one stays an enum variant (`Nothing => ...`), and `Enum::Variant` is unaffected.
-- **A non-`void` function with no `return` silently returned zero**: it is now a hard
-  lowering error (`function ... has return type ... but its body never returns a value`).
+  and rejected with `no enum defines a variant named n`. A bare identifier starting with a
+  lowercase letter is now a binding; an uppercase one stays an enum variant
+  (`Nothing => ...`), and `Enum::Variant` is unaffected.
+- **A non-`void` function with no `return` silently returned zero**: it is now a compile
+  error (`function ... has return type ... but its body never returns a value`).
   `extern "C"` declarations are excluded (they have no body).
 
-### Fixed — dogfooding round 2 (language / runtime)
+### Fixed — language and runtime
 - **Unary `~` and `!` did not lex**: `~x` and `!flag` failed with a lexer error. `~` is
   bitwise NOT (integers) and `!` is logical NOT (booleans); both now type-check and lower.
 - **`NaN != NaN` returned `false`**: float `!=` used `FloatPredicate::ONE` (ordered, NaN
@@ -87,7 +86,7 @@ Patch release. Scope is strictly fixes — no new language surface.
   (function-pointer type) now have dedicated messages instead of `expected identifier` /
   `expected right paren`.
 
-### Fixed — dogfooding round 2 (CLI)
+### Fixed — CLI
 - **Unknown options were silently ignored**: `aero build f.aero --sharedd` exited 0 and
   produced a host binary. Unknown `-`/`--` options are now hard errors (exit 2).
 - **`--target` without a value was silently ignored**: it now errors (exit 2). The same
@@ -111,10 +110,9 @@ Patch release. Scope is strictly fixes — no new language surface.
 - README version and release URLs moved to 1.2.6.
 
 ### Tooling
-- `scripts/verify.ps1`: 25 assertions — P0-1 … P0-11 for the release plan plus D1 … D14
-  dogfood regressions (unary ops, NaN, closures, struct arrays, `-> void`, `dyn` params,
-  CLI argument errors, division by zero, constant out-of-bounds, examples). Zero arguments,
-  exit 0 only when all pass.
+- `scripts/verify.ps1`: 25 end-to-end assertions covering unary operators, NaN comparison,
+  closures, struct arrays, `-> void`, `dyn` parameters, CLI argument errors, division by
+  zero, constant out-of-bounds indices and every example. Exits 0 only when all pass.
 
 ## [1.2.5] - 2026-10-11
 
@@ -128,44 +126,36 @@ Patch release. Scope is strictly fixes — no new language surface.
 - Mandelbrot N=2000: Aero 151ms / C 157ms / Rust 158ms / Go 169ms (AMD Ryzen 9 9950X3D)
 
 ### Fixes
-- Bare identifier in tuple sub-pattern position now maps to `Bind`, not `EnumVariant`.
-- Tuple arm lowering now creates a scope before lowering sub-patterns — fixes "variable already declared".
-- Guard expressions referencing `Bind` fields now pre-load into `self.vars` before dispatch — fixes "variable has no stack slot".
+- A bare lowercase identifier in a tuple sub-pattern is now a binding, not an enum variant.
+- Bindings from a tuple pattern are visible in the arm body; guards can read them.
+- Guards that reference tuple bindings no longer fail with "variable has no stack slot".
 ## [1.2.4] - 2026-10-03
 
-### Added — P1 bare-metal line
-- **Bare-metal target support** (P1.1). `*-unknown-none` triples
+### Added — bare-metal support
+- **Bare-metal targets**. `*-unknown-none` triples
   (`x86_64-unknown-none`, `aarch64-unknown-none`, `riscv64-unknown-none`)
   now produce freestanding ELF `.o` files that link with `ld.lld` without any
-  libc. Verified on all three backends end-to-end.
-- **`#[entry]` entry point** (P1.2). Marks the kernel/OS entry function so
-  freestanding mode has a well-defined start symbol instead of looking for
-  `main`. Attribute chain `HirFn → emit_object → codegen` fully propagates.
-- **`#[no_mangle]`** consumed in codegen — emits the function with its plain
-  name so the linker / bootloader can find it.
-- **`#[link_arg]` plumbed through** — custom linker arguments pass from CLI
-  (`--link-arg`) all the way to `ld.lld`.
-- **`volatile`, `atomic`, `fence` builtins** (P1.3). `volatile_load` /
-  `volatile_store` generate LLVM volatile loads and stores; `atomic_*` emit
-  `atomicrmw` / `cmpxchg`; `fence` / `fence_acq` / `fence_rel` emit the
-  corresponding LLVM fences.
-- **`asm(...)` inline assembly** (P1.4). Parser → HIR → lower → typecheck →
-  codegen. Constraints validated, illegal `memory` constraint converted to a
-  clear error telling the user to write `~{memory}`. The codegen bypasses
-  inkwell's `build_indirect_call` (which crashes on Windows with empty args)
-  and calls `LLVMBuildCall2` directly. `-arch arm64` is now split into
-  individual `Command::arg` calls so Rust's `Command` API passes the linker
-  args through correctly on iOS too.
-- **`static` / `static mut` global variables** (P1.5). Module-scope storage
-  with thread-local and section placement support.
+  libc. Verified on all three targets end-to-end.
+- **`#[entry]` entry point**. Marks the kernel entry function so freestanding
+  mode has a well-defined start symbol instead of looking for `main`.
+- **`#[no_mangle]`** — emits the function under its plain name so the linker
+  or bootloader can find it.
+- **`#[link_arg]`** — custom linker arguments pass from `--link-arg`
+  through to `ld.lld`.
+- **`volatile`, `atomic`, `fence` builtins**. `volatile_load` /
+  `volatile_store` issue volatile loads and stores; `atomic_*` provide
+  compare-exchange and read-modify-write; `fence` / `fence_acq` / `fence_rel`
+  emit the corresponding ordering barriers.
+- **`asm(...)` inline assembly**. Constraints are validated; writing plain
+  `memory` instead of `~{memory}` gives a clear error. Linker arguments are
+  now passed to the driver one by one, which fixes iOS as well.
 
 ### Fixed
-- **riscv64-unknown-none segfault** on Windows. inkwell `target-riscv` was
-  missing from features and `Target::initialize_riscv` was never called in
-  the AOT initializer; both added.
-- **Android cross-linker**: `--defsym=_snprintf=snprintf` now skipped for
-  Android (renaming happens in emit_object, same as Mach-O), and `snprintf`
-  resolved directly from bionic libc. Removed the redundant `-lc` flag.
+- **riscv64-unknown-none segfault** on Windows. The RISC-V backend was not
+  registered in the AOT path; it is now initialized like the other targets.
+- **Android cross-linker**: the `_snprintf` symbol alias is now skipped for
+  Android, and `snprintf` is resolved directly from bionic libc. The redundant
+  `-lc` flag is gone.
 - **iOS shared library**: linker arguments were concatenated into single
   strings (`"-arch arm64"`, `"-isysroot /path"`). `Command::arg` does not
   shell-split, so clang received `"-arch arm64"` as one argument and died.
@@ -183,9 +173,9 @@ Patch release. Scope is strictly fixes — no new language surface.
 
 ### Notes
 - This is the first release where Aero can compile a freestanding bare-metal
-  kernel from end to end. Follow-up work (P1.6) will strip unconditional libc
-  symbol declarations from freestanding IR and do module pruning on the
-  standard library; those are not part of this release.
+  kernel from end to end. Stripping unconditional libc symbol declarations
+  from freestanding output and pruning the standard library are not part of
+  this release.
 - `aero-v1.2.4-windows-x86_64.zip` is published with this release.
 
 ## [1.2.1] - 2026-09-26

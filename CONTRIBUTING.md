@@ -35,7 +35,7 @@ hir: reject closures that capture before codegen
 
 ## AI-generated code
 
-We use AI ourselves, around 55% of what ships. So this is not a ban.
+We use AI-assisted tooling ourselves, so this is not a ban.
 
 What we require:
 
@@ -55,8 +55,8 @@ because they were generated.
   fixes-only release. Proposals are welcome in Discussions, not as PRs.
 - New target platforms. Four supported targets that work beats eight that
   mostly work.
-- Refactors of `crates/aero-ir/src/codegen.rs`. It's a 500KB file, we know, and
-  we're not touching it until the current bug list is empty.
+- Refactors of `crates/aero-ir/src/codegen.rs`. It's the largest file in the tree and
+  we'd rather land fixes than churn it.
 - Formatting-only PRs.
 
 ## Reporting a bug

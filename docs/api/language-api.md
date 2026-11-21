@@ -1,7 +1,7 @@
 # Aero 语言 API 参考
 
 > 对应版本：Aero 1.2.6
-> 本文只描述**代码里真实存在**的接口。签名来源：`crates/aero-hir/src/lower.rs`（`BUILTINS` / `p13_builtins`）、`crates/aero-hir/src/ty.rs`（`Ty`）、`aero-registry/*/1.1.0/src/lib.aero`。
+> 本文只收录已实现并经过验证的接口；未实现或仅部分实现的能力列在「已知限制」里。
 
 ---
 
@@ -70,7 +70,7 @@ utf8_at(s: str, i: i64) -> i64  // 第 i 个码位；越界返回 -1
 int_to_f64(n: i64) -> f64
 ```
 
-> **注意（P0-9 文档校正）**：`as` 关键字在 Aero 中只用于 `expr as dyn Trait` 装箱，**不是**通用数值转换。`f64 -> i64` 目前没有内置函数。
+> **注意**：`as` 关键字在 Aero 中只用于 `expr as dyn Trait` 装箱，**不是**通用数值转换。`f64 -> i64` 目前没有内置函数。
 > 打印 64 位整数请用 `%lld`，不要用 `%d`：
 > ```aero
 > print("%lld\n", big_value);
@@ -99,7 +99,7 @@ str_hash(s: str) -> i64    // FNV-1a
 hash_i64(n: i64) -> i64    // splitmix64
 ```
 
-### 2.7 并发/裸机原语（P1.3）
+### 2.7 裸机与并发原语
 
 ```aero
 volatile_load_i32(p: *i32) -> i32
@@ -110,15 +110,39 @@ atomic_cmpxchg_i32(p: *i32, expected: i32, desired: i32) -> i32
 atomic_fence_acqrel() -> void
 ```
 
-### 2.8 张量
+`void` 的三个（两个 store 加 `atomic_fence_acqrel`）只能作为语句调用。
 
-归约：
+指针来源只有一个：`extern "C"` 声明返回的指针，或者 `#[export]` 函数的 `*i32` 参数。
+`&x` 得到的是引用而不是裸指针，不能直接喂给这些函数。
 
 ```aero
-sum(t: tensor) -> f64
-mean(t: tensor) -> f64
-max(t: tensor) -> f64
-min(t: tensor) -> f64
+extern "C" fn malloc(n: i64) -> *i32 = "malloc";
+
+let p = malloc(4);
+volatile_store_i32(p, 5);
+print("%d\n", volatile_load_i32(p));   // 5
+```
+
+### 2.8 张量
+
+归约（返回值是张量的元素类型，不是固定 `f64`）：
+
+```aero
+sum(t: tensor) -> elem    // 所有元素之和
+mean(t: tensor) -> elem   // 算术平均
+max(t: tensor) -> elem    // 最大元素
+min(t: tensor) -> elem    // 最小元素
+```
+
+`elem` 为张量创建时指定的元素类型。`tensor(2, 3)` 的元素类型是 `i64`，
+所以求出来的是整数；`tensor<f64>(2, 3)` 求出来的才是浮点。整数张量上
+`mean` 走整数除法（`[1, 2]` 的 mean 是 `1`，不是 `1.5`）。
+```aero
+let a = tensor(2, 3);
+a[0][0] = 1; a[0][1] = 2; a[0][2] = 3;
+a[1][0] = 4; a[1][1] = 5; a[1][2] = 6;
+print("%d\n", sum(a));    // 21
+print("%d\n", mean(a));   // 3
 ```
 
 矩阵乘法：
@@ -137,16 +161,27 @@ tensor_div(a: tensor, b: tensor) -> tensor
 tensor_neg(a: tensor) -> tensor
 ```
 
-BLAS Level-1：
+BLAS Level-1（`elem` 表示张量元素类型）：
 
 ```aero
-blas_dot(x: tensor, y: tensor) -> f64
-blas_nrm2(x: tensor) -> f64
-blas_asum(x: tensor) -> f64
-blas_amax(x: tensor) -> f64
-blas_scal(alpha: f64, x: tensor) -> void
-blas_axpy(alpha: f64, x: tensor, y: tensor) -> void
+blas_dot(x: tensor, y: tensor) -> elem        // 点积 x·y
+blas_nrm2(x: tensor) -> elem                  // sqrt(sum(x*x))
+blas_asum(x: tensor) -> elem                  // sum(|x|)
+blas_amax(x: tensor) -> i64                   // |x| 最大元素的下标，0 基
+blas_scal(alpha: elem, x: tensor) -> tensor   // 返回 alpha*x 的新张量
+blas_axpy(alpha: elem, x: tensor, y: tensor) -> tensor  // 返回 alpha*x + y 的新张量
 ```
+
+`blas_scal` / `blas_axpy` **不修改入参**，结果放在返回值里：
+
+```aero
+let x = tensor<f64>(3);
+x[0] = 1.0; x[1] = 2.0; x[2] = 3.0;
+let scaled = blas_scal(2.0, x);
+print("%f\n", scaled[2]);   // 6.000000，x[2] 仍是 3.0
+```
+
+`blas_amax` 返回的是下标而不是数值，取最大值本身请写 `x[blas_amax(x)]`。
 
 张量字面量：
 
@@ -342,13 +377,13 @@ fn toml_is_comment(line: str) -> bool
 
 ## 5. 已知限制（1.2.6）
 
-1. **闭包不能捕获外部变量**。v1 闭包被降级为独立匿名函数，没有环境指针。捕获时会在 lowering 阶段报：
-   `closures cannot capture outer-scope variables (not yet supported); `x` is bound in the enclosing scope`
-2. **`mod` 的 `from "path"` 导入形式不存在**。仅有内联 `mod m { ... }`；文件模块会被拒绝。该语法已从文档中移除（实现排 1.2.7）。
+1. **闭包不能捕获外部变量**。捕获外部变量会在编译期直接报错：
+   `closures cannot capture outer-scope variables (not yet supported)`。需要用的值请通过参数传进去。
+2. **`mod` 的 `from "path"` 导入形式不存在**。仅有内联 `mod m { ... }`；文件模块会被拒绝。
 3. **数值转换**只有 `int_to_f64`；没有 `f64_to_int`、`i32_to_i64` 等显式转换内置（整数窄化/扩展在赋值处由类型检查约束）。
 4. **无服务端网络原语**：`aero-net` 只有 connect/send/recv。
-5. **`String` / `Vec<T>` 方法集**由 codegen 按方法名分发，未在本文件逐一列出——请以 `crates/aero-ir/src/codegen.rs` 中 `MethodCall` 分支为准。
-6. **闭包必须标注返回类型**。`|x: i64| x * x` 会报 `closure body returns a value but the closure has no return type; annotate it, ...`（返回类型无法在 lowering 阶段推导）。
+5. **`String` / `Vec<T>` 的方法集**未在本文件逐一列出；常用方法见 `examples/` 与标准库包源码。
+6. **闭包必须标注返回类型**。`|x: i64| x * x` 会报 `closure body returns a value but the closure has no return type; annotate it, ...`（编译器不从闭包体推断返回类型）。
 7. **`let` 不支持元组解构**。`let (a, b) = t;` 会报明确的解析错误；请写 `let t = ...;` 再用 `t.0` / `t.1`。
 8. **类型注解里没有函数指针类型**。`(i64) -> i64` 这种写法会报明确的解析错误；请声明具名 `fn` 并按名字传参（`let f = my_fn; f(x)` 可用）。
 9. **数组下标只对常量做静态检查**。`a[5]`（长度 3）是编译错误；运行期下标不做边界检查，越界读取是未定义行为（与 C 一致）。

@@ -173,10 +173,9 @@ TROUBLESHOOTING
      folder path > OK > OK.
 
   Q: Diagnostics do not show up in VS Code.
-  A: Version 1.2.1 is the first release where the language
-     server sends valid diagnostics. Make sure the extension
-     is aero-lang-1.2.2.vsix or newer, and that
-     "aero.lsp.executablePath" points at this aero.exe.
+  A: Make sure the Aero VS Code extension is up to date,
+     and that "aero.lsp.executablePath" points at this
+     aero.exe.
 
 
 ============================================

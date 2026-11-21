@@ -1,7 +1,7 @@
 # Aero 包管理：注册表与清单协议
 
 > 对应版本：Aero 1.2.6
-> 来源：`crates/aero-pm/src/fetch.rs`、`registry.rs`、`manifest.rs`、`bench.rs`、`crates/aero-cli/src/main.rs`。
+> 本文档描述 1.2.6 中 `aero-pm` 使用的注册表格式与解析规则。
 
 ---
 
@@ -197,7 +197,7 @@ aero lock [dir]
 aero bench <file.aero> [--iterations N] [--samples N]
 ```
 
-工作方式（`crates/aero-pm/src/bench.rs`）：
+工作方式：
 
 1. 找出所有以 `bench_` 开头的函数
 2. 对每个函数生成一个 harness：原源码 + 一个调用 `iterations` 次的 `while` 循环
