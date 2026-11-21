@@ -1,10 +1,10 @@
-; Aero 1.1.0 — Windows Installer
+; Aero 1.2.6 — Windows Installer
 ; InnoSetup script. Build: ISCC Aero.iss
 
 #define MyAppName "Aero"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.6"
 #define MyAppPublisher "Aero Project"
-#define MyAppURL "https://github.com/aero-lang/aero"
+#define MyAppURL "https://github.com/SereinCin/aero-lang"
 #define MyAppExeName "aero.exe"
 
 [Setup]

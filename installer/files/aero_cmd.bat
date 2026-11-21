@@ -7,7 +7,7 @@ set "AERO_HOME=%~dp0"
 set "PATH=%AERO_HOME%;%PATH%"
 
 echo.
-echo  Aero 1.0.0 - Aero Programming Language
+echo  Aero 1.2.6 - Aero Programming Language
 echo  Type "aero --help" for usage.
 echo.
 

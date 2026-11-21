@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # AERO_VERSION is the FULL tag including the leading "v" (e.g. v1.2.0) to match
 # github.ref_name passed by CI (docker/build-push-action build-args), so the
 # asset name and download URL are built with a single "v".
-ARG AERO_VERSION=v1.2.0
+ARG AERO_VERSION=v1.2.6
 
 RUN BINARY="aero-${AERO_VERSION}-linux-x86_64.tar.gz"; \
     curl -fsSL "https://github.com/SereinCin/aero-lang/releases/download/${AERO_VERSION}/${BINARY}" \

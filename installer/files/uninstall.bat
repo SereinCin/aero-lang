@@ -1,11 +1,11 @@
 @echo off
-title Aero 1.2.1 Uninstaller
+title Aero 1.2.6 Uninstaller
 
 set "DIR=%~dp0"
 
 echo.
 echo ============================================
-echo   Aero 1.2.1 Uninstaller
+echo   Aero 1.2.6 Uninstaller
 echo ============================================
 echo.
 echo Removing Aero from PATH...

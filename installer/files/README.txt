@@ -1,12 +1,29 @@
 ============================================
-  Aero Programming Language v1.2.1
+  Aero Programming Language v1.2.6
   Windows 64-bit (Portable)
 ============================================
 
 Aero is a systems programming language that combines the
 performance of C with the safety of Rust, featuring:
 AOT compilation, generics, arena memory management,
-tensor operations, matmul, FFI, and more.
+tensor operations, FFI, and more.
+
+NEW IN 1.2.6
+----------------------------------------
+  - Functions and closures may end with a bare expression
+    (no trailing `;`); it becomes the return value.
+  - match supports lowercase binding patterns: `n => ...`
+    binds the scrutinee instead of looking for a variant.
+  - A non-void function that never returns a value is now a
+    compile error instead of silently returning 0.
+  - Integer division or remainder by zero aborts with a
+    line-numbered message instead of yielding 0.
+  - Constant array indices that are out of bounds are
+    rejected at compile time.
+  - `aero build` / `aero run` reject unknown flags and missing
+    option values instead of ignoring them.
+  - `print("%d", i64)` no longer truncates to 32 bits.
+  - `aero ls` works on Windows without a `HOME` variable.
 
 NEW IN 1.2.1
 ----------------------------------------
@@ -163,5 +180,5 @@ TROUBLESHOOTING
 
 
 ============================================
-  Aero 1.2.1 - Windows 64-bit
+  Aero 1.2.6 - Windows 64-bit
 ============================================

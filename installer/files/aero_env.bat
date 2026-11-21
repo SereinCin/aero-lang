@@ -9,5 +9,5 @@ REM The installer also adds Aero to the system PATH automatically.
 set "AERO_HOME=%~dp0"
 set "PATH=%AERO_HOME%;%PATH%"
 
-echo Aero 1.0.0 environment loaded.
+echo Aero 1.2.6 environment loaded.
 echo   AERO_HOME=%AERO_HOME%

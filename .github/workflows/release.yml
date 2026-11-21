@@ -17,7 +17,7 @@ on:
       tag:
         description: "Release tag to (re)compute SHA256SUMS for (e.g. v1.2.0)"
         required: false
-        default: "v1.2.0"
+        default: "v1.2.6"
 
 permissions:
   contents: write

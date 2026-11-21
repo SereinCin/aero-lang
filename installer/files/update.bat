@@ -1,12 +1,12 @@
 @echo off
-title Aero 1.2.1 Updater
+title Aero 1.2.6 Updater
 
 echo.
 echo ============================================
-echo   Aero 1.2.1 Updater
+echo   Aero 1.2.6 Updater
 echo ============================================
 echo.
-echo Current version: v1.2.1
+echo Current version: v1.2.6
 echo.
 echo To update:
 echo.
