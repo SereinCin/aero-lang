@@ -29,11 +29,12 @@ while (i < 20) {
 
 ```console
 $ aero run hello.aero      # JIT，冷启动约 90ms
-$ aero build hello.aero    # 137KB 单文件 exe
+$ aero build hello.aero    # 约 135KB 单文件 exe
 ```
 
 同一份 mandelbrot（N=2000），同一台 Ryzen 9 9950X3D：Aero 151ms，C 157ms，
-Rust 158ms，Go 169ms。四份代码输出一致（`alive=1588053`）。
+Rust 158ms，Go 169ms。四份代码输出一致（`alive=1588053`）。以上是单次测量；
+Aero 自身重复运行落在 147ms 到 194ms 之间。
 
 我们不打算替代 Rust。Rust 有生态、有编译器团队、有十年积累，我们没有。
 Aero 现在能做的事很窄：**把一段数值代码变成很小的原生库，然后从 Python 或 C 里调它。**

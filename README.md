@@ -31,11 +31,12 @@ while (i < 20) {
 
 ```console
 $ aero run hello.aero      # JIT, ~90ms cold start
-$ aero build hello.aero    # 137KB standalone exe
+$ aero build hello.aero    # ~135KB standalone exe
 ```
 
 Same mandelbrot (N=2000), same Ryzen 9 9950X3D: Aero 151ms, C 157ms, Rust 158ms,
-Go 169ms. All four print the same `alive=1588053`.
+Go 169ms. All four print the same `alive=1588053`. Those are single runs; Aero's
+own wall clock varies between 147ms and 194ms run to run.
 
 We are not trying to replace Rust. Rust has an ecosystem, a compiler team, and a
 decade of work behind it; we don't.

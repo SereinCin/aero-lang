@@ -123,7 +123,8 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **Benchmarks Game**: nbody / fannkuch-redux / spectral-norm / binary-trees / mandelbrot — all 5 run correctly, on par with Rust / Go.
 
 ### Performance
-- Mandelbrot N=2000: Aero 151ms / C 157ms / Rust 158ms / Go 169ms (AMD Ryzen 9 9950X3D)
+- Mandelbrot N=2000: Aero 151ms / C 157ms / Rust 158ms / Go 169ms (AMD Ryzen 9 9950X3D),
+  one run per implementation; repeat runs of the Aero build land in 147–194ms.
 
 ### Fixes
 - A bare lowercase identifier in a tuple sub-pattern is now a binding, not an enum variant.
@@ -134,8 +135,11 @@ Patch release. Scope is strictly fixes — no new language surface.
 ### Added — bare-metal support
 - **Bare-metal targets**. `*-unknown-none` triples
   (`x86_64-unknown-none`, `aarch64-unknown-none`, `riscv64-unknown-none`)
-  now produce freestanding ELF `.o` files that link with `ld.lld` without any
-  libc. Verified on all three targets end-to-end.
+  emit freestanding ELF objects via `--emit-obj`. Object emission is verified
+  on all three targets. The object still bundles the standard library, so it
+  references libc symbols (`malloc`, `memcpy`, `printf`, …) even when the
+  entry function does not use them; linking needs your own linker script plus
+  those symbols (`ld.lld -e <entry> --gc-sections` alone is not enough).
 - **`#[entry]` entry point**. Marks the kernel entry function so freestanding
   mode has a well-defined start symbol instead of looking for `main`.
 - **`#[no_mangle]`** — emits the function under its plain name so the linker
