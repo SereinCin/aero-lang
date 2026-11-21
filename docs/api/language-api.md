@@ -45,7 +45,7 @@ assert_eq(a: i64, b: i64) -> void
 
 ```aero
 len(s: str) -> i64
-substr(s: str, start: i64, len: i64) -> str
+substr(s: str, start: i64, end: i64) -> str   // 截取 [start, end)，end 是下标不是长度
 str_to_int(s: str) -> i64
 str_contains(haystack: str, needle: str) -> bool
 str_find(haystack: str, needle: str) -> i64
