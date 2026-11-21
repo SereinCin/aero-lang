@@ -82,7 +82,7 @@ int_to_f64(n: i64) -> f64
 ```aero
 read_file(path: str) -> str
 write_file(path: str, content: str) -> i64
-arg_count() -> i64
+arg_count() -> i64             // 不含程序名；无额外参数时为 0
 arg(i: i64) -> str
 rand() -> i64
 time() -> i64                 // Unix 秒
@@ -384,12 +384,17 @@ fn toml_is_comment(line: str) -> bool
 4. **无服务端网络原语**：`aero-net` 只有 connect/send/recv。
 5. **`String` / `Vec<T>` 的方法集**未在本文件逐一列出；常用方法见 `examples/` 与标准库包源码。
 6. **闭包必须标注返回类型**。`|x: i64| x * x` 会报 `closure body returns a value but the closure has no return type; annotate it, ...`（编译器不从闭包体推断返回类型）。
-7. **`let` 不支持元组解构**。`let (a, b) = t;` 会报明确的解析错误；请写 `let t = ...;` 再用 `t.0` / `t.1`。
+7. **`let` 不支持元组解构，元组也没有 `t.0` 写法**。`let (a, b) = t;` 和 `t.0` 都会报解析错误；请写 `let t = ...;` 再用 `t[0]` / `t[1]` 取值。
 8. **类型注解里没有函数指针类型**。`(i64) -> i64` 这种写法会报明确的解析错误；请声明具名 `fn` 并按名字传参（`let f = my_fn; f(x)` 可用）。
 9. **数组下标只对常量做静态检查**。`a[5]`（长度 3）是编译错误；运行期下标不做边界检查，越界读取是未定义行为（与 C 一致）。
 10. **整数除零/取模零运行期终止**。生成代码会打印 `aero: division by zero (line N)` 并 `abort()`（退出码 3），不再静默返回 0。
 11. **整数溢出按二补数回绕**（与 Rust release 一致），不产生诊断。
 12. **`match` 是语句，不是表达式**。arm 的块尾值会被丢弃，需要产出值请写 `return` 或赋值。
-13. **非 `void` 函数必须能返回**。既没有 `return`、块尾也没有表达式的函数会报
-    `function ... has return type ... but its body never returns a value`（1.2.6 之前静默返回 0）。
+13. **非 `void` 函数必须每条路径都能返回**。函数体末尾必须 `return` 或是一个尾部表达式；
+    每个分支都要覆盖，`if (x > 0) { return 1; }` 这种漏掉 `else` 的写法会报
+    `function ... a path through its body reaches the end without returning a value`（1.2.6 之前静默返回 0）。
+    `loop { ... }` 内没有 `break`、或 `match` 的所有 arm 都返回并且覆盖了全部变体（或含 `_` / 绑定兜底 arm），才视为不会落到末尾。
 14. **`if` / `while` 的条件必须带括号**：`if (cond) { ... }`；`if` 也不是表达式，不能写 `let x = if ...`。
+15. **同一作用域内不能重复 `let` 同名变量（没有 shadowing）**：会报 `variable ... is already declared in this scope`；换名或放进内层块。
+16. **元组只能整体传递和下标读取**，没有解构、没有 `t.0` 字段写法。
+17. **`match` 不做穷尽性检查**：运行时没有 arm 匹配就直接落在 `match` 之后；非 `void` 函数请补兜底 arm 或末尾 `return`。

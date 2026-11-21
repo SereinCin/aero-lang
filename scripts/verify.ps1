@@ -351,7 +351,29 @@ $d14 = Run-Aero "d14_no_return" @'
 fn broken() -> i64 { }
 print("%lld\n", broken());
 '@
-Assert "D14" "缺少 return 的非 void 函数报错" ($d14.Exit -ne 0 -and $d14.Out -match "never returns a value") "exit=$($d14.Exit) out=$($d14.Out)"
+Assert "D14" "缺少 return 的非 void 函数报错" ($d14.Exit -ne 0 -and $d14.Out -match "without returning a value") "exit=$($d14.Exit) out=$($d14.Out)"
+
+# D15: 只有部分分支 return 时同样必须报错（此前 f(0) 静默返回 0）
+$d15 = Run-Aero "d15_branch_no_return" @'
+fn f(x: i64) -> i64 {
+    if (x > 0) { return 1; }
+}
+print("%lld\n", f(0));
+'@
+Assert "D15" "漏掉 else 分支的 return 报错" ($d15.Exit -ne 0 -and $d15.Out -match "without returning a value") "exit=$($d15.Exit) out=$($d15.Out)"
+
+# D16: 用户枚举可复用 Some / None 变体名（prelude 已改为 Option::Some 限定写法）
+$d16 = Run-Aero "d16_enum_some" @'
+enum Maybe { Some(i64), Nothing }
+fn unwrap(m: Maybe) -> i64 {
+    match (m) {
+        Maybe::Some(v) => { return v; }
+        Maybe::Nothing => { return -1; }
+    }
+}
+print("%lld\n", unwrap(Maybe::Some(7)));
+'@
+Assert "D16" "自定义 enum 可用 Some 变体" ($d16.Exit -eq 0 -and $d16.Out -match "^7") "exit=$($d16.Exit) out=$($d16.Out)"
 
 # —————————————————————————————————————
 # 汇总输出

@@ -1212,7 +1212,7 @@ impl<'a> Parser<'a> {
         let mut_ = self.eat(&TokenKind::Mut);
         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
             return Err(self.error_at_current(
-                "tuple destructuring in `let` is not supported yet; bind the tuple to one name and read elements with `t.0`, `t.1`, ...",
+                "tuple destructuring in `let` is not supported yet; bind the tuple to one name and read elements with `t[0]`, `t[1]`, ...",
             ));
         }
         let name = self.expect_ident()?;

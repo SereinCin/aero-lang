@@ -3585,3 +3585,55 @@ fn same_arch_cross_os_target_is_rejected() {
     assert!(!produced, "a host executable must not be produced");
 }
 
+
+// ---------- return-path analysis ----------
+
+#[test]
+fn branch_without_return_is_rejected() {
+    // `if` without `else` falls off the end when the condition is false; this
+    // used to compile and return 0 silently.
+    let out = run_aero(
+        "fn f(x: i64) -> i64 {\n    if (x > 0) { return 1; }\n}\nprint(\"%lld\\n\", f(0));",
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("without returning a value"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn exhaustive_match_counts_as_returning() {
+    let src = r#"
+enum E { A(i64), B }
+fn pick(e: E) -> i64 {
+    match (e) {
+        E::A(x) => { return x; }
+        E::B => { return 0; }
+    }
+}
+print("%lld\n", pick(E::A(5)));
+"#;
+    let out = run_aero(src);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "5\n");
+}
+
+#[test]
+fn user_enum_may_reuse_some_variant() {
+    // The prelude matches with `Option::Some`, so a user enum can define `Some`.
+    let src = r#"
+enum Maybe { Some(i64), Nothing }
+fn unwrap(m: Maybe) -> i64 {
+    match (m) {
+        Maybe::Some(v) => { return v; }
+        Maybe::Nothing => { return -1; }
+    }
+}
+print("%lld\n", unwrap(Maybe::Some(7)));
+"#;
+    let out = run_aero(src);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "7\n");
+}

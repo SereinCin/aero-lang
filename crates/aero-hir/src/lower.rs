@@ -1531,12 +1531,14 @@ impl Lowerer {
                             body.stmts.push(HirStmt::Return(Some(e), sp));
                         }
                     }
-                    // A non-void function with no `return` anywhere (and no tail value)
-                    // used to compile and silently return zero — reject it instead.
-                    if !body.stmts.iter().any(stmt_contains_return) {
+                    // A non-void function whose body can reach the end without a value
+                    // used to compile and silently return zero. Checking for "some
+                    // `return` exists" missed branches: `if (x > 0) { return 1; }`
+                    // has a `return` yet falls off the end when the condition is false.
+                    if !block_returns(&body, &lowerer.enums) {
                         return Err(LowerError::new(
                             format!(
-                                "function `{name}` has return type `{}` but its body never returns a value; add a `return` or end the body with an expression",
+                                "function `{name}` has return type `{}` but a path through its body reaches the end without returning a value; every branch must return or end with an expression",
                                 ret.as_ref().map(|t| format!("{t:?}")).unwrap_or_default()
                             ),
                             span,
@@ -3087,26 +3089,90 @@ fn stmt_body(stmt: &Stmt) -> &[Stmt] {
     }
 }
 
-/// Does this statement (or any nested block / match arm) contain a `return`?
-/// Used to reject non-void functions that can never produce a value, which used
-/// to compile and silently return zero.
-fn stmt_contains_return(s: &HirStmt) -> bool {
+/// Can control never reach the end of this block? True when some statement in
+/// it always returns or diverges (anything after it is dead). Used to reject
+/// non-void functions that fall off the end of a branch, which used to compile
+/// and silently return zero.
+fn block_returns(block: &HirBlock, enums: &[HirEnumDef]) -> bool {
+    block.stmts.iter().any(|s| stmt_returns(s, enums))
+}
+
+fn stmt_returns(s: &HirStmt, enums: &[HirEnumDef]) -> bool {
     match s {
         HirStmt::Return(..) => true,
+        // Both arms must return; an `if` without `else` can fall through.
         HirStmt::If {
             then_body,
             else_body,
             ..
-        } => {
-            then_body.stmts.iter().any(stmt_contains_return)
-                || else_body.stmts.iter().any(stmt_contains_return)
+        } => block_returns(then_body, enums) && block_returns(else_body, enums),
+        // `loop` only exits via `break`. A `break` at this level means the block
+        // can fall through; one inside a nested loop belongs to that loop.
+        HirStmt::Loop { body, .. } => !block_contains_break(body),
+        HirStmt::Match { arms, .. } => {
+            if !arms.iter().all(|a| block_returns(&a.body, enums)) {
+                return false;
+            }
+            let catch_all = arms.iter().any(|a| {
+                a.guard.is_none()
+                    && matches!(
+                        a.pattern,
+                        HirMatchPattern::Wildcard | HirMatchPattern::Bind(..)
+                    )
+            });
+            catch_all || enum_match_is_exhaustive(arms, enums)
         }
-        HirStmt::While { body, .. } | HirStmt::Loop { body, .. } | HirStmt::For { body, .. } => {
-            body.stmts.iter().any(stmt_contains_return)
+        _ => false,
+    }
+}
+
+/// All arms are unguarded variants of one enum and together cover every variant.
+fn enum_match_is_exhaustive(arms: &[HirMatchArm], enums: &[HirEnumDef]) -> bool {
+    let mut enum_name: Option<&str> = None;
+    let mut covered: Vec<&str> = Vec::new();
+    for arm in arms {
+        if arm.guard.is_some() {
+            return false;
         }
-        HirStmt::Match { arms, .. } => arms
-            .iter()
-            .any(|a| a.body.stmts.iter().any(stmt_contains_return)),
+        match &arm.pattern {
+            HirMatchPattern::EnumVariant {
+                enum_name: en,
+                variant,
+                ..
+            } => {
+                if let Some(prev) = enum_name {
+                    if prev != en {
+                        return false;
+                    }
+                } else {
+                    enum_name = Some(en);
+                }
+                covered.push(variant);
+            }
+            _ => return false,
+        }
+    }
+    enum_name
+        .and_then(|n| enums.iter().find(|e| e.name == n))
+        .map(|e| e.variants.iter().all(|(v, _)| covered.contains(&v.as_str())))
+        .unwrap_or(false)
+}
+
+fn block_contains_break(block: &HirBlock) -> bool {
+    block.stmts.iter().any(stmt_contains_break)
+}
+
+/// A `break` that targets the loop owning this statement (nested loops own theirs).
+fn stmt_contains_break(s: &HirStmt) -> bool {
+    match s {
+        HirStmt::Break(..) => true,
+        HirStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => block_contains_break(then_body) || block_contains_break(else_body),
+        HirStmt::Match { arms, .. } => arms.iter().any(|a| block_contains_break(&a.body)),
+        HirStmt::While { .. } | HirStmt::Loop { .. } | HirStmt::For { .. } => false,
         _ => false,
     }
 }

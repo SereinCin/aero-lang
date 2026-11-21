@@ -14,16 +14,16 @@ enum Option<T> {
 impl<T> Option<T> {
     fn is_some(o: Option<T>) -> bool {
         match (o) {
-            Some(x) => { return true; }
-            None => { return false; }
+            Option::Some(x) => { return true; }
+            Option::None => { return false; }
         }
         return false;
     }
 
     fn is_none(o: Option<T>) -> bool {
         match (o) {
-            Some(x) => { return false; }
-            None => { return true; }
+            Option::Some(x) => { return false; }
+            Option::None => { return true; }
         }
         return false;
     }
@@ -31,8 +31,8 @@ impl<T> Option<T> {
     // Returns the inner value; falls back to `def` when None.
     fn unwrap_or(o: Option<T>, def: T) -> T {
         match (o) {
-            Some(v) => { return v; }
-            None => { return def; }
+            Option::Some(v) => { return v; }
+            Option::None => { return def; }
         }
         return def;
     }
@@ -47,32 +47,32 @@ enum Result<T, E> {
 impl<T, E> Result<T, E> {
     fn is_ok(r: Result<T, E>) -> bool {
         match (r) {
-            Ok(x) => { return true; }
-            Err(e) => { return false; }
+            Result::Ok(x) => { return true; }
+            Result::Err(e) => { return false; }
         }
         return false;
     }
 
     fn is_err(r: Result<T, E>) -> bool {
         match (r) {
-            Ok(x) => { return false; }
-            Err(e) => { return true; }
+            Result::Ok(x) => { return false; }
+            Result::Err(e) => { return true; }
         }
         return false;
     }
 
     fn unwrap_or(r: Result<T, E>, def: T) -> T {
         match (r) {
-            Ok(v) => { return v; }
-            Err(e) => { return def; }
+            Result::Ok(v) => { return v; }
+            Result::Err(e) => { return def; }
         }
         return def;
     }
 
     fn unwrap_err_or(r: Result<T, E>, def: E) -> E {
         match (r) {
-            Ok(v) => { return def; }
-            Err(e) => { return e; }
+            Result::Ok(v) => { return def; }
+            Result::Err(e) => { return e; }
         }
         return def;
     }

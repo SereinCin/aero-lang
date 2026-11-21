@@ -76,6 +76,11 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **A non-`void` function with no `return` silently returned zero**: it is now a compile
   error (`function ... has return type ... but its body never returns a value`).
   `extern "C"` declarations are excluded (they have no body).
+- **A missing `return` on one branch was still accepted**: `fn f(x: i64) -> i64 { if (x > 0) { return 1; } }`
+  compiled and `f(0)` returned `0` without a diagnostic. The check now walks the body
+  instead of only asking whether *some* `return` exists: every path must return, an `if`
+  must return from both arms, and a `match` must return from all arms and carry a
+  `_` / binding arm. A `loop` with no `break` counts as diverging.
 
 ### Fixed — language and runtime
 - **Unary `~` and `!` did not lex**: `~x` and `!flag` failed with a lexer error. `~` is
@@ -99,8 +104,13 @@ Patch release. Scope is strictly fixes — no new language surface.
   `array element requires a scalar value`. Array literals now store aggregate elements
   recursively, and array literals take their element type from the elements (not always `i64`).
 - **Indexing anything except a variable or an array literal failed**: `bag.items[0]`,
-  `f()[1]`, and `t.0[2]` now work for both load and store; aggregate elements keep their
-  address so `bag.items[1].field = v` and `arr[i].field` work.
+  `f()[1]`, and `t[0][2]` now work for both load and store; aggregate elements keep their
+  address so `bag.items[1].field = v` and `arr[i].field` work. Tuples are read with
+  `t[0]` / `t[1]`; the `t.0` spelling is not supported.
+- **A user enum could not define `Some` / `None` / `Ok` / `Err`**: the prelude matched on
+  bare `Some(x)` patterns, so `enum Maybe { Some(i64) }` failed with
+  ``variant `Some` is ambiguous (defined by Option, Maybe)``. Prelude patterns are now
+  qualified (`Option::Some`, `Result::Ok`, ...), so user enums may reuse those names.
 - **Constant out-of-bounds index was silently accepted**: `a[5]` on `[i64; 3]` is now a
   compile error (`index 5 is out of bounds for an array of length 3`).
 - **Integer division/remainder by zero silently returned 0**: generated code now prints
@@ -130,6 +140,9 @@ Patch release. Scope is strictly fixes — no new language surface.
 - `as f64` type errors now point at the `int_to_f64(x)` builtin.
 - Removed the never-implemented `mod foo from "..."` syntax from the docs.
 - `asm!` corrected to `asm(...)` (call syntax, no `!`).
+- Documented that tuples are read with `t[0]` / `t[1]` (`t.0` is not supported) and that
+  `arg_count()` excludes the program name. The tuple-destructuring parser error said
+  `t.0`; it now says `t[0]`.
 - README version and release URLs moved to 1.2.6.
 
 ### Tooling
