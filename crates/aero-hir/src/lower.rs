@@ -3114,14 +3114,22 @@ fn stmt_returns(s: &HirStmt, enums: &[HirEnumDef]) -> bool {
                 return false;
             }
             let catch_all = arms.iter().any(|a| {
-                a.guard.is_none()
-                    && matches!(
-                        a.pattern,
-                        HirMatchPattern::Wildcard | HirMatchPattern::Bind(..)
-                    )
+                a.guard.is_none() && pattern_is_irrefutable(&a.pattern)
             });
             catch_all || enum_match_is_exhaustive(arms, enums)
         }
+        _ => false,
+    }
+}
+
+/// Can this pattern match any value of its type? `_` and bindings are
+/// irrefutable; a tuple is irrefutable when every element is. Used so a
+/// `match (p) { (x, y) => ... }` counts as exhaustive and its arm's `return`
+/// covers every path.
+fn pattern_is_irrefutable(p: &HirMatchPattern) -> bool {
+    match p {
+        HirMatchPattern::Wildcard | HirMatchPattern::Bind(..) => true,
+        HirMatchPattern::Tuple(pats, _) => pats.iter().all(pattern_is_irrefutable),
         _ => false,
     }
 }

@@ -3621,6 +3621,42 @@ print("%lld\n", pick(E::A(5)));
 }
 
 #[test]
+fn tuple_match_counts_as_returning() {
+    // `(x, y)` matches every tuple, so the single arm covers all paths.
+    let src = r#"
+fn d2(p: (i64, i64)) -> i64 {
+    match (p) {
+        (x, y) => { return x + y; }
+    }
+}
+print("%lld\n", d2((1, 2)));
+"#;
+    let out = run_aero(src);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "3\n");
+}
+
+#[test]
+fn refutable_tuple_match_does_not_count_as_returning() {
+    // `(0, 0)` only covers one tuple; other values still fall off the end.
+    let src = r#"
+fn d2(p: (i64, i64)) -> i64 {
+    match (p) {
+        (0, 0) => { return 1; }
+    }
+}
+print("%lld\n", d2((0, 0)));
+"#;
+    let out = run_aero(src);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("without returning a value"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn user_enum_may_reuse_some_variant() {
     // The prelude matches with `Option::Some`, so a user enum can define `Some`.
     let src = r#"
