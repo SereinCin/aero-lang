@@ -730,6 +730,10 @@ pub fn compile_to_exe_cached(
     target: &str,
     source_dir: Option<&Path>,
 ) -> Result<bool, AeroError> {
+    // Reject cross-OS targets before a cache lookup: an entry written by an
+    // older release could otherwise be copied out and reported as a successful
+    // build of the requested target.
+    host_can_link_target(target)?;
     // Cache dir lives next to the output target (Cargo-style). Fall back to the
     // current directory when the target has no parent.
     let base = exe_path.parent().map(Path::to_path_buf).unwrap_or_else(|| std::path::PathBuf::from("."));

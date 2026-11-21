@@ -15,6 +15,14 @@ Patch release. Scope is strictly fixes — no new language surface.
 - **`--target` silently ignored the OS part**: a cross-OS triple on the host linker now
   fails with a clear `AOT` error and exit code 1 instead of emitting a host binary.
   `--emit-obj` remains the escape hatch for freestanding objects.
+- **A cached host binary could satisfy a cross-OS `--target`**: the cross-link check now
+  runs before the artifact cache lookup, so an entry written by an older release cannot
+  be copied out and reported as a successful build.
+- **`aero run` overflowed the stack when a `let` was inside a long-running loop**: stack
+  slots now live in one block per function instead of being reserved on every iteration.
+  AOT builds were unaffected because `mem2reg` removed those allocas first.
+- **Subcommands treated `--help` / `-h` as a file or package name**: every subcommand now
+  prints the usage text and exits 0.
 - **Closure bodies required a trailing `;`**: a block may now end with a bare expression
   (Rust-style tail expression), with or without the semicolon.
 - **Closure capture produced `internal error: variable has no stack slot`**: capturing an
@@ -33,6 +41,10 @@ Patch release. Scope is strictly fixes — no new language surface.
   `Aero.iss`, `install.bat` / `uninstall.bat` / `update.bat` / `aero_cmd.bat` /
   `aero_env.bat` / `README.txt`, and the Linux/macOS install and uninstall scripts
   still said 1.0.0 / 1.1.0 / 1.2.0 / 1.2.1. All now report 1.2.6.
+- **Installer README facts were stale**: `aero.exe` is 67 MB (not 59 MB), the update guide
+  names `aero-v1.2.6-windows-x86_64.zip` (not `Aero-*-win64.zip`), the offline VSIX is no
+  longer pinned to 1.2.2, and the requirement line no longer claims a static build — the
+  PE imports VCRUNTIME140 and UCRT.
 - **`--pyext` linked libpython on Linux and macOS**: an extension module must leave
   the CPython symbols undefined so the interpreter resolves them at import time.
   manylinux runtime images ship no shared `libpython`, and linking it on macOS can

@@ -38,6 +38,12 @@ Usage:
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `aero <command> --help` prints the same usage as `aero --help`. Without
+    // this, subcommands treat the flag as a file or package name.
+    if args.len() > 2 && args[2..].iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return;
+    }
     let code = match args.get(1).map(String::as_str) {
         Some("--version") | Some("-V") | Some("-v") | Some("version") => {
             println!("aero {}", env!("CARGO_PKG_VERSION"));

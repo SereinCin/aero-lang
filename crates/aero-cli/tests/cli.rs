@@ -3540,3 +3540,48 @@ print("%d\n", s);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out), "124999750000\n");
 }
+
+#[test]
+fn subcommand_help_prints_usage() {
+    // `aero new --help` used to treat the flag as a package name.
+    let out = Command::new(env!("CARGO_BIN_EXE_aero"))
+        .args(["new", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("Usage:"), "stdout: {}", stdout(&out));
+}
+
+#[cfg(windows)]
+#[test]
+fn same_arch_cross_os_target_is_rejected() {
+    // A Windows host cannot link a Linux binary. This used to succeed silently
+    // (or return a cached PE) because only the arch was compared.
+    let path = std::env::temp_dir().join(format!(
+        "aero_cross_{}_{}.aero",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::write(&path, "print(\"hi\\n\");").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_aero"))
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target",
+            "x86_64-unknown-linux-gnu",
+        ])
+        .output()
+        .unwrap();
+    let exe = path.with_extension("exe");
+    let produced = exe.exists();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe);
+    assert!(!out.status.success(), "expected failure");
+    assert!(
+        stderr(&out).contains("cannot cross-link"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    assert!(!produced, "a host executable must not be produced");
+}
+
