@@ -74,8 +74,8 @@ Patch release. Scope is strictly fixes — no new language surface.
   lowercase letter is now a binding; an uppercase one stays an enum variant
   (`Nothing => ...`), and `Enum::Variant` is unaffected.
 - **A non-`void` function with no `return` silently returned zero**: it is now a compile
-  error (`function ... has return type ... but its body never returns a value`).
-  `extern "C"` declarations are excluded (they have no body).
+  error (`function ... has return type ... but a path through its body reaches the end
+  without returning a value`). `extern "C"` declarations are excluded (they have no body).
 - **A missing `return` on one branch was still accepted**: `fn f(x: i64) -> i64 { if (x > 0) { return 1; } }`
   compiled and `f(0)` returned `0` without a diagnostic. The check now walks the body
   instead of only asking whether *some* `return` exists: every path must return, an `if`

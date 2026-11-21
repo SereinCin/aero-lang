@@ -396,5 +396,4 @@ fn toml_is_comment(line: str) -> bool
     `loop { ... }` 内没有 `break`、或 `match` 的所有 arm 都返回并且覆盖了全部变体（或含 `_` / 绑定兜底 arm），才视为不会落到末尾。
 14. **`if` / `while` 的条件必须带括号**：`if (cond) { ... }`；`if` 也不是表达式，不能写 `let x = if ...`。
 15. **同一作用域内不能重复 `let` 同名变量（没有 shadowing）**：会报 `variable ... is already declared in this scope`；换名或放进内层块。
-16. **元组只能整体传递和下标读取**，没有解构、没有 `t.0` 字段写法。
-17. **`match` 不做穷尽性检查**：运行时没有 arm 匹配就直接落在 `match` 之后；非 `void` 函数请补兜底 arm 或末尾 `return`。
+16. **`match` 不做穷尽性检查**：运行时没有 arm 匹配就直接落在 `match` 之后；非 `void` 函数请补兜底 arm 或末尾 `return`。
